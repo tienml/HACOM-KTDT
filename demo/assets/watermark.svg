@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2000 1125" role="img" aria-label="">
+  <title>Hacom Holdings</title>
+
+  <!-- Sóng vàng đồng: cong chữ S, đỉnh bên trái, trũng bên phải, khuất sau khiên -->
+  <g fill="none" stroke="#C9A45C" stroke-linecap="round">
+    <path d="M0 560 C 240 400, 430 395, 640 470 C 850 545, 980 680, 1170 760 C 1360 838, 1520 838, 1660 792 C 1790 750, 1910 720, 2000 715" stroke-width="9" opacity="0.95"/>
+    <path d="M0 600 C 240 445, 430 440, 640 512 C 850 585, 980 715, 1170 792 C 1360 866, 1520 866, 1660 822 C 1790 782, 1910 752, 2000 748" stroke-width="7" opacity="0.8"/>
+    <path d="M0 640 C 240 490, 430 486, 640 555 C 850 625, 980 750, 1170 824 C 1360 894, 1520 894, 1660 852 C 1790 814, 1910 786, 2000 782" stroke-width="6" opacity="0.65"/>
+    <path d="M0 682 C 240 537, 430 534, 640 600 C 850 666, 980 786, 1170 856 C 1360 922, 1520 922, 1660 882 C 1790 846, 1910 820, 2000 816" stroke-width="4.5" opacity="0.5"/>
+    <path d="M0 724 C 240 585, 430 583, 640 646 C 850 708, 980 822, 1170 888 C 1360 950, 1520 950, 1660 912 C 1790 878, 1910 854, 2000 850" stroke-width="3" opacity="0.4"/>
+    <path d="M0 764 C 240 632, 430 630, 640 690 C 850 750, 980 858, 1170 920 C 1360 978, 1520 978, 1660 942 C 1790 910, 1910 888, 2000 884" stroke-width="2" opacity="0.3"/>
+  </g>
+
+  <!-- Khiên: nền trắng đè lên sóng, viền vàng mảnh, đáy vuốt nhọn mềm -->
+  <path d="M806 262
+           C806 220 828 202 866 199
+           C940 191 1156 191 1230 199
+           C1268 202 1290 220 1291 262
+           C1296 352 1292 448 1262 548
+           C1230 662 1152 772 1049 843
+           C946 772 868 662 836 548
+           C806 448 802 352 806 262 Z"
+        fill="#FFFFFF" stroke="#EBD7B0" stroke-width="8"/>
+
+  <!-- Hai thân chữ H màu xám: mép ngoài cong theo khiên, đáy vuốt nhọn -->
+  <path d="M935 256 L935 690 C878 636 848 556 838 470 C831 402 831 322 838 278 C840 262 848 256 862 256 Z" fill="#D8D8DA"/>
+  <path d="M1163 256 L1163 690 C1220 636 1250 556 1260 470 C1267 402 1267 322 1260 278 C1258 262 1250 256 1236 256 Z" fill="#D8D8DA"/>
+
+  <!-- Trục hồng: khối trên và cột dưới kết nhọn -->
+  <rect x="978" y="256" width="142" height="130" rx="6" fill="#EDD8DB"/>
+  <path d="M978 442 h142 v300 l-71 52 -71 -52 z" fill="#EDD8DB"/>
+</svg>

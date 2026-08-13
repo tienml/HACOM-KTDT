@@ -1,0 +1,9 @@
+# Tài liệu Excel nội bộ - không đưa lên repo
+*.xlsx
+*.xls
+
+# File tạm khi kiểm thử
+test_*.py
+debug_*.py
+shot_wm.py
+test_shot_*.png

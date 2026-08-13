@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 200" role="img" aria-label="Hacom Holdings">
+  <title>Hacom Holdings</title>
+  <defs>
+    <clipPath id="hShieldInner">
+      <path d="M28 40c0-14 8-22 24-22h96c16 0 24 8 24 22v68c0 45-33 74-72 96-39-22-72-51-72-96z"/>
+    </clipPath>
+  </defs>
+
+  <!-- Khiên bên trái (cùng hình học với shield.svg, thu nhỏ 62%) -->
+  <g transform="translate(18,16) scale(0.62)">
+    <path d="M10 28C10 6 22 -6 46 -6h108c24 0 36 12 36 34v78c0 54-42 89-90 115C52 195 10 160 10 106z"
+          transform="translate(0,12)" fill="#C9A45C"/>
+    <g clip-path="url(#hShieldInner)">
+      <rect x="28" y="16" width="42" height="196" fill="#4B5563"/>
+      <rect x="130" y="16" width="42" height="196" fill="#4B5563"/>
+      <rect x="80" y="16" width="40" height="76" fill="#E4032E"/>
+      <path d="M80 112h40v70l-20 22-20-22z" fill="#E4032E"/>
+      <rect x="28" y="92" width="144" height="20" fill="#C9A45C"/>
+    </g>
+  </g>
+
+  <!-- Chữ bên phải -->
+  <text x="170" y="116" fill="#E4032E" textLength="350" lengthAdjust="spacingAndGlyphs"
+        font-family="Arial Black, Arial Bold, Arial, Helvetica, sans-serif" font-size="66" font-weight="900">Hacom</text>
+  <text x="174" y="160" fill="#C9A45C" textLength="338" lengthAdjust="spacingAndGlyphs"
+        font-family="Georgia, Times New Roman, serif" font-size="29">HOLDINGS</text>
+</svg>

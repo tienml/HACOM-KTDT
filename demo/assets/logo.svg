@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 400" role="img" aria-label="Hacom Holdings">
+  <title>Hacom Holdings</title>
+  <defs>
+    <clipPath id="vShieldInner">
+      <path d="M78 62c0-15 9-24 26-24h112c17 0 26 9 26 24v74c0 49-36 81-82 105-46-24-82-56-82-105z"/>
+    </clipPath>
+  </defs>
+
+  <!-- Khiên vàng -->
+  <path d="M60 52c0-24 13-37 39-37h122c26 0 39 13 39 37v84c0 58-45 96-100 124-55-28-100-66-100-124z" fill="#C9A45C"/>
+
+  <g clip-path="url(#vShieldInner)">
+    <!-- Hai thân chữ H -->
+    <rect x="78" y="36" width="42" height="212" fill="#4B5563"/>
+    <rect x="200" y="36" width="42" height="212" fill="#4B5563"/>
+    <!-- Trục đỏ phía trên -->
+    <rect x="140" y="36" width="40" height="60" fill="#E4032E"/>
+    <!-- Đuôi đỏ vuốt nhọn -->
+    <path d="M140 124h40v82l-20 19-20-19z" fill="#E4032E"/>
+    <!-- Thanh ngang vàng toàn khiên -->
+    <rect x="78" y="96" width="164" height="28" fill="#C9A45C"/>
+  </g>
+
+  <!-- textLength giữ chữ luôn nằm trong khung, không phụ thuộc font hệ thống -->
+  <text x="160" y="326" text-anchor="middle" fill="#E4032E" textLength="248" lengthAdjust="spacingAndGlyphs"
+        font-family="Arial Black, Arial Bold, Arial, Helvetica, sans-serif" font-size="72" font-weight="900">Hacom</text>
+  <text x="160" y="372" text-anchor="middle" fill="#C9A45C" textLength="236" lengthAdjust="spacingAndGlyphs"
+        font-family="Georgia, Times New Roman, serif" font-size="30">HOLDINGS</text>
+</svg>

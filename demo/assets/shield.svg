@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 260" role="img" aria-label="Hacom Holdings">
+  <title>Hacom Holdings</title>
+  <defs>
+    <clipPath id="shieldInner">
+      <path d="M28 40c0-14 8-22 24-22h96c16 0 24 8 24 22v68c0 45-33 74-72 96-39-22-72-51-72-96z"/>
+    </clipPath>
+  </defs>
+
+  <path d="M10 28C10 6 22 -6 46 -6h108c24 0 36 12 36 34v78c0 54-42 89-90 115C52 195 10 160 10 106z"
+        transform="translate(0,12)" fill="#C9A45C"/>
+
+  <g clip-path="url(#shieldInner)">
+    <!-- Hai thân chữ H -->
+    <rect x="28" y="16" width="42" height="196" fill="#4B5563"/>
+    <rect x="130" y="16" width="42" height="196" fill="#4B5563"/>
+    <!-- Trục đỏ phía trên -->
+    <rect x="80" y="16" width="40" height="76" fill="#E4032E"/>
+    <!-- Đuôi đỏ vuốt nhọn -->
+    <path d="M80 112h40v70l-20 22-20-22z" fill="#E4032E"/>
+    <!-- Thanh ngang vàng toàn khiên -->
+    <rect x="28" y="92" width="144" height="20" fill="#C9A45C"/>
+  </g>
+</svg>
