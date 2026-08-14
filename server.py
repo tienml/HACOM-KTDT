@@ -4,15 +4,21 @@ Nhiệm vụ:
   - Serve demo tĩnh (thư mục demo/) để Railway chạy một service duy nhất.
   - Nhận sự kiện thu hoạch từ trình duyệt: /api/upload (file + metadata) và /api/event (metadata).
   - Metadata lưu vào SQLite (harvest.db) để tổng hợp; xem và tải về tại /admin.
-  - Bản file KHÔNG lưu trên server: chỉ chuyển tiếp sang Telegram của người phụ trách
-    rồi bỏ, giữ đúng nguyên tắc "server không lưu nội dung file".
+  - Bản file KHÔNG lưu trên server:
+      • File ≤ 50MB: chuyển tiếp sang Telegram rồi bỏ.
+      • File > 50MB: nếu đã cấu hình lưu trữ S3-compatible (Cloudflare R2, Backblaze B2...)
+        thì stream lên bucket và gửi link xem tạm qua Telegram; nếu chưa cấu hình thì chỉ log.
 
 Biến môi trường (đặt trên Railway):
   PORT                 - cổng lắng nghe (Railway tự cấp)
   TELEGRAM_BOT_TOKEN   - token bot Telegram (để trống thì chỉ lưu metadata)
-  TELEGRAM_CHAT_ID     - chat nhận file
+  TELEGRAM_CHAT_ID     - chat nhận file/link
   ADMIN_PASSWORD       - mật khẩu trang /admin (mặc định "hacom-admin" nếu chưa đặt)
   HARVEST_DB           - đường dẫn file SQLite (mặc định harvest.db cạnh server.py)
+  S3_ENDPOINT_URL      - endpoint của dịch vụ S3-compatible (ví dụ https://<account>.r2.cloudflarestorage.com)
+  S3_ACCESS_KEY_ID     - access key
+  S3_SECRET_ACCESS_KEY - secret key
+  S3_BUCKET            - tên bucket
 """
 
 import csv
@@ -96,6 +102,49 @@ def telegram_send_document(filename, data, caption):
     except Exception as err:  # mạng, timeout, token sai...
         return f'lỗi Telegram: {err}'
 
+def telegram_send_message(text):
+    """Gửi tin nhắn văn bản tới Telegram (cho trường hợp file lớn gửi qua link)."""
+    token = os.environ.get('TELEGRAM_BOT_TOKEN', '').strip()
+    chat_id = os.environ.get('TELEGRAM_CHAT_ID', '').strip()
+    if not token or not chat_id:
+        return 'chưa cấu hình Telegram'
+    payload = json.dumps({'chat_id': chat_id, 'text': text[:4096]}).encode()
+    req = urlrequest.Request(
+        f'https://api.telegram.org/bot{token}/sendMessage',
+        data=payload, headers={'Content-Type': 'application/json'})
+    try:
+        with urlrequest.urlopen(req, timeout=30) as res:
+            result = json.loads(res.read())
+        return 'ok' if result.get('ok') else f'lỗi Telegram: {result.get("description")}'
+    except Exception as err:
+        return f'lỗi Telegram: {err}'
+
+# ------------------------------------------------------- object storage (S3-compatible)
+
+STORAGE_KEYS = ('S3_ENDPOINT_URL', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY', 'S3_BUCKET')
+
+def storage_configured():
+    return all(os.environ.get(k, '').strip() for k in STORAGE_KEYS)
+
+def storage_put_and_link(fileobj, filename):
+    """Stream file lên bucket S3-compatible và trả link xem tạm (7 ngày)."""
+    import boto3  # noqa: lazy import — server vẫn chạy nếu chưa cài boto3
+    endpoint = os.environ['S3_ENDPOINT_URL'].strip()
+    bucket = os.environ['S3_BUCKET'].strip()
+    client = boto3.client(
+        's3',
+        endpoint_url=endpoint,
+        aws_access_key_id=os.environ['S3_ACCESS_KEY_ID'].strip(),
+        aws_secret_access_key=os.environ['S3_SECRET_ACCESS_KEY'].strip(),
+    )
+    stamp = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+    safe_name = filename.replace('\\', '_').replace('/', '_')
+    key = f'hacom-ktdt/{stamp}/{uuid.uuid4().hex[:8]}-{safe_name}'
+    client.upload_fileobj(fileobj, bucket, key)
+    url = client.generate_presigned_url(
+        'get_object', Params={'Bucket': bucket, 'Key': key}, ExpiresIn=7 * 86400)
+    return url
+
 def format_size(num):
     for unit in ('B', 'KB', 'MB', 'GB'):
         if num < 1024 or unit == 'GB':
@@ -107,29 +156,45 @@ def format_size(num):
 
 @app.get('/api/health')
 def health():
-    return jsonify(ok=True, telegram=telegram_configured())
+    return jsonify(ok=True, telegram=telegram_configured(), storage=storage_configured())
 
 @app.post('/api/upload')
 def upload():
-    """Nhận một file tải lên: lưu metadata, chuyển tiếp bản file sang Telegram rồi bỏ."""
+    """Nhận một file tải lên: lưu metadata; bản file gửi qua Telegram (≤50MB) hoặc
+    stream lên lưu trữ thứ ba rồi gửi link (>50MB). Server không giữ bản file."""
     meta = {key: (request.form.get(key) or '').strip()
             for key in ('projectName', 'nodePath', 'docType', 'uploader')}
     upload_file = request.files.get('file')
     telegram = None
     if upload_file and upload_file.filename:
-        data = upload_file.read()
+        # Lấy size mà không đọc hết vào bộ nhớ (werkzeug đã buffer sang temp file).
+        upload_file.seek(0, os.SEEK_END)
+        size = upload_file.tell()
+        upload_file.seek(0)
         meta['fileName'] = upload_file.filename
-        meta['fileSize'] = len(data)
-        if len(data) > TG_LIMIT:
-            telegram = 'file quá 50MB, không gửi được Telegram'
-        else:
-            caption = (
-                f'UPLOAD | Dự án: {meta.get("projectName") or "-"}\n'
-                f'Bước: {meta.get("nodePath") or "-"}\n'
-                f'Loại tài liệu: {meta.get("docType") or "-"}\n'
-                f'Người đẩy: {meta.get("uploader") or "-"} | {format_size(len(data))}'
-            )[:1024]
+        meta['fileSize'] = size
+        caption = (
+            f'UPLOAD | Dự án: {meta.get("projectName") or "-"}\n'
+            f'Bước: {meta.get("nodePath") or "-"}\n'
+            f'Loại tài liệu: {meta.get("docType") or "-"}\n'
+            f'Người đẩy: {meta.get("uploader") or "-"} | {format_size(size)}'
+        )[:1024]
+        if size <= TG_LIMIT:
+            data = upload_file.read()
             telegram = telegram_send_document(upload_file.filename, data, caption)
+        else:
+            # File > 50MB: Bot API không gửi được — chuyển qua lưu trữ S3-compatible.
+            if storage_configured():
+                try:
+                    url = storage_put_and_link(upload_file, upload_file.filename)
+                    msg = f'{caption}\n\nFile lớn ({format_size(size)}), tải về tại:\n{url}\n(Link xem được 7 ngày)'
+                    result = telegram_send_message(msg)
+                    telegram = result if result == 'ok' else result
+                    meta['storageUrl'] = url
+                except Exception as err:
+                    telegram = f'lỗi lưu trữ file lớn: {err}'
+            else:
+                telegram = 'file quá 50MB, chưa cấu hình lưu trữ thứ ba (S3/R2) để gửi'
     else:
         meta['fileName'] = meta.get('fileName', '')
     event_id, at = insert_event('upload', meta)
@@ -181,6 +246,8 @@ def admin():
             detail += f' | xác nhận: {p["confirmedBy"]}'
         if p.get('note'):
             detail += f' | {p["note"]}'
+        if p.get('storageUrl'):
+            detail += ' | file lớn → lưu trữ thứ ba (link 7 ngày)'
         tg = p.get('telegram')
         body_rows.append(
             f'<tr><td>{row["at"][5:16].replace("T", " ")}</td><td>{row["type"]}</td>'
