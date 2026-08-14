@@ -348,4 +348,5 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', '8080'))
     if not os.environ.get('ADMIN_PASSWORD'):
         print('CẢNH BÁO: chưa đặt ADMIN_PASSWORD, /admin dùng mật khẩu mặc định "hacom-admin".')
-    app.run(host='0.0.0.0', port=port)
+    # threaded: nhiều request đồng thời (gửi sớm nhiều file cùng lúc không chặn nhau).
+    app.run(host='0.0.0.0', port=port, threaded=True)

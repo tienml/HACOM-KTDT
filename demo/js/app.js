@@ -1394,7 +1394,7 @@
     const node = D.NODE_BY_ID.get(nodeId);
     if (!isFolder(node)) return;
     ui.drawerNodeId = nodeId;
-    ui.pendingFiles = [];
+    clearPending(true);
     el.drawer.classList.add('is-open');
     el.drawer.setAttribute('aria-hidden', 'false');
     el.drawerBackdrop.classList.add('is-open');
@@ -1404,7 +1404,7 @@
 
   function closeDrawer() {
     ui.drawerNodeId = null;
-    ui.pendingFiles = [];
+    clearPending(true);
     el.drawer.classList.remove('is-open');
     el.drawer.setAttribute('aria-hidden', 'true');
     el.drawerBackdrop.classList.remove('is-open');
@@ -1415,17 +1415,26 @@
   function addPendingFiles(files) {
     const project = S.getActiveProject();
     files.forEach((file) => {
+      const ctrl = new AbortController();
       ui.pendingFiles.push({
         file,
+        ctrl,
         early: HacomSync.startUpload(file, {
           projectName: project.name,
           nodePath: nodePathOf(ui.drawerNodeId),
           docType: '',
           uploader: '',
-        }).catch(() => null), // null = gửi sớm hỏng, sẽ gửi đủ cả file khi bấm Lưu
+        }, ctrl.signal).catch(() => null), // null = gửi sớm hỏng, sẽ gửi đủ cả file khi bấm Lưu
       });
     });
     renderDrawer();
+  }
+
+  /** Xóa danh sách chờ; abort=true hủy các request gửi sớm đang truyền
+   *  (người dùng bỏ file / đóng drawer thì file không tiếp tục gửi lên server). */
+  function clearPending(abort) {
+    if (abort) ui.pendingFiles.forEach((p) => p.ctrl?.abort());
+    ui.pendingFiles = [];
   }
 
   function bindDropzone() {
@@ -1681,6 +1690,8 @@
     },
 
     'drop-pending'(btn) {
+      const entry = ui.pendingFiles[Number(btn.dataset.index)];
+      entry?.ctrl?.abort(); // hủy gửi sớm nếu file đang truyền
       ui.pendingFiles.splice(Number(btn.dataset.index), 1);
       renderDrawer();
     },

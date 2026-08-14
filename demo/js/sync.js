@@ -40,8 +40,8 @@ window.HacomSync = (() => {
     return res.json();
   }
 
-  async function postForm(url, formData) {
-    const res = await fetch(url, { method: 'POST', body: formData });
+  async function postForm(url, formData, signal) {
+    const res = await fetch(url, { method: 'POST', body: formData, signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return res.json();
   }
@@ -79,13 +79,14 @@ window.HacomSync = (() => {
   }
 
   /** Gửi file lên server ngay khi người dùng vừa chọn (gửi sớm). Trả promise để nơi gọi
-   *  quyết định xử lý lỗi — KHÔNG tự xếp hàng như sendUpload. */
-  function startUpload(file, meta) {
+   *  quyết định xử lý lỗi — KHÔNG tự xếp hàng như sendUpload. Truyền signal để hủy
+   *  request khi người dùng bỏ file khỏi danh sách lúc đang truyền. */
+  function startUpload(file, meta, signal) {
     if (!enabled) return Promise.reject(new Error('sync tắt (file://)'));
     const form = new FormData();
     form.append('file', file, file.name);
     Object.entries(meta).forEach(([key, value]) => form.append(key, value ?? ''));
-    return postForm('/api/upload', form);
+    return postForm('/api/upload', form, signal);
   }
 
   /** Gửi bù các sự kiện đang nằm trong hàng đợi. */
