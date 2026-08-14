@@ -199,6 +199,8 @@ def upload():
                 telegram = 'file quá 50MB, chưa cấu hình lưu trữ thứ ba (S3/R2) để gửi'
     else:
         meta['fileName'] = meta.get('fileName', '')
+    if telegram:
+        meta['telegram'] = telegram  # ghi vào DB để /admin hiển thị kết quả gửi
     event_id, at = insert_event('upload', meta)
     return jsonify(ok=True, id=event_id, at=at, telegram=telegram)
 
