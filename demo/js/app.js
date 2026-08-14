@@ -1285,7 +1285,8 @@
         <div class="dropzone" id="dropzone">
           <div class="dz-icon">📄</div>
           <div class="dz-text">Kéo file vào đây hoặc <button type="button" class="btn btn-sm" data-action="pick-file">chọn file</button></div>
-          <div class="dz-sub">Chỉ ghi nhận tên file và loại tài liệu.</div>
+          <div class="dz-sub">Chỉ ghi nhận tên file và loại tài liệu. Kéo cả thư mục? Nén thành .zip trước khi tải lên.</div>
+          ${ui.folderWarning ? '<div class="dz-warn">Bạn vừa kéo một thư mục. Hệ thống chỉ nhận file — vui lòng nén thư mục thành .zip rồi tải lên.</div>' : ''}
           <input type="file" id="file-input" multiple class="sr-only">
         </div>
 
@@ -1425,6 +1426,18 @@
     }));
 
     zone.addEventListener('drop', (e) => {
+      // Phát hiện thư mục: trình duyệt trả entry.isDirectory qua webkitGetAsEntry.
+      const items = [...(e.dataTransfer?.items || [])];
+      const hasFolder = items.some((it) => {
+        const entry = it.webkitGetAsEntry ? it.webkitGetAsEntry() : null;
+        return entry && entry.isDirectory;
+      });
+      if (hasFolder) {
+        ui.folderWarning = true;
+        renderDrawer();
+        setTimeout(() => { ui.folderWarning = false; renderDrawer(); }, 6000);
+        return;
+      }
       const files = [...(e.dataTransfer?.files || [])];
       if (files.length) { ui.pendingFiles.push(...files); renderDrawer(); }
     });
