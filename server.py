@@ -24,6 +24,7 @@ Biến môi trường (đặt trên Railway):
 import csv
 import io
 import json
+import mimetypes
 import os
 import sqlite3
 import sys
@@ -140,7 +141,8 @@ def storage_put_and_link(fileobj, filename):
     stamp = datetime.now(timezone.utc).strftime('%Y-%m-%d')
     safe_name = filename.replace('\\', '_').replace('/', '_')
     key = f'hacom-ktdt/{stamp}/{uuid.uuid4().hex[:8]}-{safe_name}'
-    client.upload_fileobj(fileobj, bucket, key)
+    content_type = mimetypes.guess_type(filename)[0] or 'application/octet-stream'
+    client.upload_fileobj(fileobj, bucket, key, ExtraArgs={'ContentType': content_type})
     url = client.generate_presigned_url(
         'get_object', Params={'Bucket': bucket, 'Key': key}, ExpiresIn=7 * 86400)
     return url
