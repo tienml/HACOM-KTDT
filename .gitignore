@@ -7,3 +7,8 @@ test_*.py
 debug_*.py
 shot_wm.py
 test_shot_*.png
+
+# Dữ liệu thu hoạch khi chạy server cục bộ
+harvest.db
+__pycache__/
+*.pyc

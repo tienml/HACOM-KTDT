@@ -2,8 +2,7 @@
  * Lưu trạng thái demo vào localStorage.
  *
  * LƯU Ý: demo chỉ lưu THÔNG TIN VỀ file (tên, dung lượng, loại tài liệu do người
- * dùng khai), KHÔNG lưu nội dung file. Không có server, không gửi dữ liệu ra ngoài.
- * Vì vậy có thể dùng hồ sơ thật để test mà không lo rò rỉ.
+ * dùng khai), KHÔNG lưu nội dung file.
  */
 
 const STORAGE_KEY = 'hacom-ktdt-demo-v1';

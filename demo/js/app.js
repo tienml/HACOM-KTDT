@@ -166,6 +166,17 @@
     return formatDate(iso);
   }
 
+  /** Đường dẫn đầy đủ của node, ví dụ "Bước 2. Chuẩn bị đầu tư > ... > Hồ sơ đất đai". */
+  function nodePathOf(nodeId) {
+    const names = [];
+    let current = D.NODE_BY_ID.get(nodeId);
+    while (current) {
+      names.unshift(current.name);
+      current = current.parentId ? D.NODE_BY_ID.get(current.parentId) : null;
+    }
+    return names.join(' > ');
+  }
+
   /** Cập nhật cuối = thời điểm mới nhất trong mọi hoạt động của dự án. */
   function projectLastUpdate(project) {
     const times = [new Date(project.createdAt).getTime()];
@@ -1655,6 +1666,13 @@
       const uploader = document.getElementById('uploader')?.value;
       const count = ui.pendingFiles.length;
       S.addDocuments(project.id, btn.dataset.id, ui.pendingFiles, docType, uploader);
+      const syncMeta = {
+        projectName: project.name,
+        nodePath: nodePathOf(btn.dataset.id),
+        docType,
+        uploader: uploader?.trim() || '',
+      };
+      ui.pendingFiles.forEach((file) => HacomSync.sendUpload(file, syncMeta));
       ui.pendingFiles = [];
       toast(`Đã ghi nhận ${count} tài liệu loại "${docType}".`);
       render();
@@ -1685,6 +1703,12 @@
       const level = document.getElementById('proposal-level')?.value;
       const by = document.getElementById('proposal-by')?.value;
       S.addProposal(btn.dataset.id, name, level, by);
+      HacomSync.sendEvent('proposal', {
+        nodePath: nodePathOf(btn.dataset.id),
+        name,
+        level,
+        proposedBy: by?.trim() || '',
+      });
       toast('Đã ghi lại đề xuất. Chưa thành chuẩn cho tới khi được xác nhận.', true);
       renderDrawer();
     },
@@ -1710,6 +1734,11 @@
         return { name: item.name, level: proposal?.level === 'co_dieu_kien' ? 'co_dieu_kien' : 'bat_buoc' };
       });
       S.confirmChecklist(nodeId, items, by);
+      HacomSync.sendEvent('confirm', {
+        nodePath: nodePathOf(nodeId),
+        items,
+        confirmedBy: by.trim(),
+      });
       toast('Đã chốt chuẩn. Từ giờ bước này sẽ báo đủ/thiếu.');
       render();
       renderDrawer();
