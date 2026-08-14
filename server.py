@@ -178,7 +178,7 @@ def upload():
         caption = (
             f'UPLOAD | Dự án: {meta.get("projectName") or "-"}\n'
             f'Bước: {meta.get("nodePath") or "-"}\n'
-            f'Loại tài liệu: {meta.get("docType") or "-"}\n'
+            f'Loại tài liệu: {meta.get("docType") or "(chưa khai)"}\n'
             f'Người đẩy: {meta.get("uploader") or "-"} | {format_size(size)}'
         )[:1024]
         if size <= TG_LIMIT:
@@ -206,10 +206,22 @@ def upload():
 
 @app.post('/api/event')
 def event():
-    """Nhận sự kiện chỉ-metadata (xác nhận checklist, đề xuất, hoặc upload gửi bù khi mất mạng)."""
+    """Nhận sự kiện chỉ-metadata. Riêng loại 'upload-meta' có uploadId sẽ ghép thêm metadata
+    (loại tài liệu, người đẩy...) vào bản ghi upload đã gửi sớm, thay vì tạo dòng mới."""
     body = request.get_json(silent=True) or {}
     event_type = str(body.get('type') or 'other')[:40]
     payload = {k: v for k, v in body.items() if k != 'type'}
+    if event_type == 'upload-meta' and payload.get('uploadId'):
+        upload_id = payload.pop('uploadId')
+        with db() as conn:
+            row = conn.execute('SELECT payload FROM events WHERE id = ?', (upload_id,)).fetchone()
+            if row:
+                data = json.loads(row['payload'])
+                # Chỉ ghi đè bằng giá trị thực; bỏ qua rỗng để không xóa dữ liệu cũ.
+                data.update({k: v for k, v in payload.items() if v not in (None, '')})
+                conn.execute('UPDATE events SET payload = ? WHERE id = ?',
+                             (json.dumps(data, ensure_ascii=False), upload_id))
+                return jsonify(ok=True, id=upload_id, merged=True)
     event_id, at = insert_event(event_type, payload)
     return jsonify(ok=True, id=event_id, at=at)
 

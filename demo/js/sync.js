@@ -6,10 +6,15 @@
  * bản file được chuyển tiếp sang Telegram của người phụ trách. Server KHÔNG lưu nội
  * dung file — chỉ giữ metadata. Khi mở bằng file:// thì lớp này tự tắt (demo thuần tĩnh).
  *
+ * Bản file được GỬI SỚM ngay khi người dùng vừa chọn/kéo file (chưa cần khai loại tài
+ * liệu), để lúc bấm Lưu chỉ phải ghép nốt metadata (loại tài liệu, người đẩy) vào bản ghi
+ * cũ — người dùng không phải chờ upload khi bấm Lưu.
+ *
  * Hàng đợi store-and-forward: nếu lúc gửi bị lỗi mạng, sự kiện được xếp vào localStorage
  * và tự gửi bù khi trang tải lại hoặc khi có mạng trở lại. Riêng bản file không được lưu
- * cục bộ (tôn trọng "không lưu nội dung"), nên nếu mất mạng đúng lúc gửi file thì chỉ còn
- * metadata được gửi bù, kèm ghi chú "file chưa gửi được".
+ * cục bộ (tôn trọng "không lưu nội dung"), nên nếu mất mạng đúng lúc gửi file thì khi bấm
+ * Lưu hệ thống gửi lại cả file; nếu vẫn lỗi thì chỉ còn metadata được gửi bù, kèm ghi chú
+ * "file chưa gửi được".
  */
 
 window.HacomSync = (() => {
@@ -73,6 +78,16 @@ window.HacomSync = (() => {
     });
   }
 
+  /** Gửi file lên server ngay khi người dùng vừa chọn (gửi sớm). Trả promise để nơi gọi
+   *  quyết định xử lý lỗi — KHÔNG tự xếp hàng như sendUpload. */
+  function startUpload(file, meta) {
+    if (!enabled) return Promise.reject(new Error('sync tắt (file://)'));
+    const form = new FormData();
+    form.append('file', file, file.name);
+    Object.entries(meta).forEach(([key, value]) => form.append(key, value ?? ''));
+    return postForm('/api/upload', form);
+  }
+
   /** Gửi bù các sự kiện đang nằm trong hàng đợi. */
   async function flush() {
     if (!enabled || flushing) return;
@@ -97,5 +112,5 @@ window.HacomSync = (() => {
     setInterval(flush, 60000);
   }
 
-  return { sendEvent, sendUpload, flush, enabled };
+  return { sendEvent, sendUpload, startUpload, flush, enabled };
 })();

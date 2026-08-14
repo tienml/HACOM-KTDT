@@ -1292,10 +1292,10 @@
 
         ${ui.pendingFiles.length ? `
           <div class="pending-list">
-            ${ui.pendingFiles.map((file, index) => `
+            ${ui.pendingFiles.map((item, index) => `
               <div class="pending-item">
-                <span class="pi-name">${esc(file.name)}</span>
-                <span class="pi-size">${formatSize(file.size)}</span>
+                <span class="pi-name">${esc(item.file.name)}</span>
+                <span class="pi-size">${formatSize(item.file.size)}</span>
                 <button type="button" class="btn btn-ghost btn-sm" data-action="drop-pending" data-index="${index}"
                         aria-label="Bỏ file này">✕</button>
               </div>`).join('')}
@@ -1410,6 +1410,24 @@
     el.drawerBackdrop.classList.remove('is-open');
   }
 
+  /** Thêm file vào danh sách chờ và gửi sớm lên server ngay khi người dùng vừa chọn,
+   *  để lúc bấm Lưu chỉ phải ghép nốt metadata (loại tài liệu, người đẩy). */
+  function addPendingFiles(files) {
+    const project = S.getActiveProject();
+    files.forEach((file) => {
+      ui.pendingFiles.push({
+        file,
+        early: HacomSync.startUpload(file, {
+          projectName: project.name,
+          nodePath: nodePathOf(ui.drawerNodeId),
+          docType: '',
+          uploader: '',
+        }).catch(() => null), // null = gửi sớm hỏng, sẽ gửi đủ cả file khi bấm Lưu
+      });
+    });
+    renderDrawer();
+  }
+
   function bindDropzone() {
     const zone = document.getElementById('dropzone');
     const input = document.getElementById('file-input');
@@ -1439,12 +1457,12 @@
         return;
       }
       const files = [...(e.dataTransfer?.files || [])];
-      if (files.length) { ui.pendingFiles.push(...files); renderDrawer(); }
+      if (files.length) addPendingFiles(files);
     });
 
     input.addEventListener('change', () => {
       const files = [...input.files];
-      if (files.length) { ui.pendingFiles.push(...files); renderDrawer(); }
+      if (files.length) addPendingFiles(files);
     });
   }
 
@@ -1678,14 +1696,24 @@
       }
       const uploader = document.getElementById('uploader')?.value;
       const count = ui.pendingFiles.length;
-      S.addDocuments(project.id, btn.dataset.id, ui.pendingFiles, docType, uploader);
+      S.addDocuments(project.id, btn.dataset.id, ui.pendingFiles.map((p) => p.file), docType, uploader);
       const syncMeta = {
         projectName: project.name,
         nodePath: nodePathOf(btn.dataset.id),
         docType,
         uploader: uploader?.trim() || '',
       };
-      ui.pendingFiles.forEach((file) => HacomSync.sendUpload(file, syncMeta));
+      ui.pendingFiles.forEach((entry) => {
+        entry.early.then((res) => {
+          if (res && res.id) {
+            // File đã gửi sớm thành công: chỉ ghép nốt metadata vào bản ghi cũ.
+            HacomSync.sendEvent('upload-meta', { uploadId: res.id, ...syncMeta });
+          } else {
+            // Gửi sớm thất bại (lỗi mạng...): gửi lại cả file kèm đủ metadata như trước.
+            HacomSync.sendUpload(entry.file, syncMeta);
+          }
+        });
+      });
       ui.pendingFiles = [];
       toast(`Đã ghi nhận ${count} tài liệu loại "${docType}".`);
       render();
