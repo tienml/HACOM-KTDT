@@ -3,59 +3,50 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>HACOM — Quản lý hồ sơ dự án đầu tư</title>
-<link rel="icon" href="assets/shield.svg">
+<title>Hacom AI Invest — Gợi ý quy trình đầu tư</title>
+<link rel="icon" href="assets/shield.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
 
 <div class="app">
-
-  <aside class="sidebar" id="sidebar"></aside>
-
-  <div class="main-col">
-    <header class="header">
-      <div class="header-mid" id="header-mid"></div>
-
-      <div class="header-actions">
-        <button type="button" class="btn btn-ghost btn-icon" id="btn-guide" title="Kịch bản demo" aria-label="Kịch bản demo">
-          <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true"><path fill="currentColor" d="M10 2a8 8 0 100 16 8 8 0 000-16zm.9 12.2H9.1v-1.8h1.8v1.8zm1.3-5.1c-.3.4-.8.8-1.2 1-.3.3-.4.5-.4.9v.4H9.1v-.6c0-.7.2-1.2.8-1.7.5-.4.8-.6.8-1.1 0-.5-.4-.8-.9-.8s-.9.3-1 .9H7.2c.1-1.4 1.1-2.3 2.6-2.3 1.4 0 2.5.8 2.5 2.1 0 .5-.1.9-.4 1.2z"/></svg>
-        </button>
-        <button type="button" class="btn btn-ghost btn-icon" id="btn-reset" title="Xóa dữ liệu demo" aria-label="Xóa dữ liệu demo">
-          <svg viewBox="0 0 20 20" width="17" height="17" aria-hidden="true"><path fill="currentColor" d="M7.5 2h5l.5 1H16v1.5H4V3h3l.5-1zM5 6h10l-.7 10.2a1.5 1.5 0 01-1.5 1.4H7.2a1.5 1.5 0 01-1.5-1.4L5 6zm3 2v7h1.2V8H8zm2.8 0v7H12V8h-1.2z"/></svg>
-        </button>
+  <!-- Sidebar trái cố định theo mockup -->
+  <aside class="sidebar" id="sidebar">
+    <div class="side-brand">
+      <img src="assets/shield.svg" alt="Hacom" class="side-brand-logo">
+      <div class="side-brand-text">
+        <span class="side-brand-title">Hacom AI Invest</span>
+        <span class="side-brand-sub">AI gợi ý quy trình đầu tư</span>
       </div>
-    </header>
+    </div>
 
-    <main class="main" id="main"></main>
-  </div>
+    <nav class="side-nav" id="side-nav"></nav>
 
+    <div class="side-foot">
+      <div class="ai-card">
+        <div class="ai-card-head">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 0 1 9 9c0 3.9-2.5 7.2-6 8.4"/><path d="M12 3a9 9 0 0 0-9 9c0 3.9 2.5 7.2 6 8.4"/><path d="M9 10h.01"/><path d="M15 10h.01"/><path d="M9.5 15a3.5 3.5 0 0 0 5 0"/></svg>
+          Trợ lý AI
+        </div>
+        <p class="ai-card-body">Đặt câu hỏi về quy trình đầu tư, AI sẽ phân tích và gợi ý quy trình phù hợp nhất.</p>
+        <button class="btn btn-primary" data-action="go-ask">Chat với AI</button>
+      </div>
+      <div class="side-watermark"><img src="assets/watermark.svg" alt=""></div>
+      <div class="side-copy">&copy; 2024 Hacom AI Invest<br>Tất cả quyền được bảo lưu.</div>
+    </div>
+  </aside>
+
+  <!-- Nội dung chính -->
+  <main class="main" id="main"></main>
 </div>
 
-<div class="drawer-backdrop" id="drawer-backdrop"></div>
-
-<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" aria-hidden="true">
-  <div class="drawer-head">
-    <div class="drawer-title-wrap">
-      <div class="drawer-path" id="drawer-path"></div>
-      <h2 id="drawer-title">&nbsp;</h2>
-      <div class="drawer-chips" id="drawer-chips"></div>
-    </div>
-    <button type="button" class="btn btn-ghost btn-icon" id="drawer-close" aria-label="Đóng">
-      <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M15.3 5.7l-1-1L10 9l-4.3-4.3-1 1L9 10l-4.3 4.3 1 1L10 11l4.3 4.3 1-1L11 10z"/></svg>
-    </button>
-  </div>
-  <div class="drawer-body" id="drawer-body"></div>
-</aside>
-
-<div class="toast-wrap" id="toast-wrap" aria-live="polite"></div>
+<div class="toast-wrap" id="toast-wrap"></div>
 
 <script src="js/data.js"></script>
 <script src="js/store.js"></script>
-<script src="js/sync.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>
