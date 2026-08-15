@@ -56,6 +56,20 @@ PROPOSE_PROMPT = (
     '(4) tôn trọng trạng thái tham khảo và câu trả lời khảo sát trong ngữ cảnh; nếu điều chỉnh khác thì phải nêu lý do ngắn trong note.'
 )
 
+# Chatbot tổng quát: trả lời tự nhiên về mọi chủ đề, nhưng với câu hỏi quy trình đầu tư thì DỰA CHẶT ngữ cảnh.
+CHAT_PROMPT = (
+    'Bạn là trợ lý AI thân thiện của Hacom AI Invest — ứng dụng gợi ý quy trình đầu tư dự án bất động sản tại Việt Nam. '
+    'Trách nhiệm kép: '
+    '(a) Với câu hỏi về quy trình đầu tư, thủ tục, giai đoạn, hồ sơ, giấy phép, môi trường, PCCC, đất đai… '
+    'PHẢI DỰA CHẶT vào NGỮ CẢNH hệ thống cung cấp; không bịa thủ tục/con số ngoài ngữ cảnh; thiếu dữ liệu nói "chưa xác định", '
+    'không được khẳng định "không áp dụng" nếu ngữ cảnh không ghi rõ; ngắn gọn tối đa ~200 từ, gạch đầu dòng khi liệt kê, '
+    'không dùng heading markdown. '
+    '(b) Với câu hỏi xã giao (xin chào, cảm ơn…), hoặc câu hỏi tổng quát ngoài phạm vi dữ liệu, '
+    'trả lời tự nhiên, ngắn gọn, thân thiện như một chatbot thực thụ; vẫn giữ vai trò trợ lý đầu tư BĐS; '
+    'khéo léo gợi về chủ đề đầu tư/quy trình khi hợp lý, nhưng KHÔNG ép buộc. '
+    'Luôn dùng tiếng Việt.'
+)
+
 # Gợi ý danh mục: so sánh các loại hình dự án, trả về JSON thuần để frontend dựng bảng + gợi ý AI.
 PORTFOLIO_PROMPT = (
     'Bạn là cố vấn đầu tư bất động sản của Hacom AI Invest, am hiểu quy trình đầu tư dự án tại Việt Nam. '
@@ -89,7 +103,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         path = self.path.split('?')[0]
-        if path not in ('/api/ask', '/api/propose', '/api/portfolio'):
+        if path not in ('/api/ask', '/api/propose', '/api/portfolio', '/api/chat'):
             self._json(404, {'error': 'not-found'})
             return
         try:
@@ -104,6 +118,9 @@ class Handler(SimpleHTTPRequestHandler):
         if path == '/api/ask':
             system = SYSTEM_PROMPT
             user_text = f"Câu hỏi: {body.get('question', '')}\n\nNGỮ CẢNH:\n{body.get('context', '')}"
+        elif path == '/api/chat':
+            system = CHAT_PROMPT
+            user_text = f"Câu hỏi: {body.get('question', '')}\n\nNGỮ CẢNH:\n{body.get('context', '')}"
         elif path == '/api/portfolio':
             system = PORTFOLIO_PROMPT
             user_text = body.get('context', '')
@@ -114,26 +131,48 @@ class Handler(SimpleHTTPRequestHandler):
             'system_instruction': {'parts': [{'text': system}]},
             'contents': [{'role': 'user', 'parts': [{'text': user_text}]}],
         }).encode('utf-8')
+        is_stream = (path == '/api/chat')
+        url = f'https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}'
+        url += ':streamGenerateContent?alt=sse' if is_stream else ':generateContent'
         req = Request(
-            f'https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent',
+            url,
             data=payload,
             method='POST',
             headers={'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_API_KEY},
         )
         try:
-            with urlopen(req, timeout=60) as resp:
-                data = json.loads(resp.read().decode('utf-8'))
-            text = data['candidates'][0]['content']['parts'][0]['text']
-            self._json(200, {'answer': text})
+            resp = urlopen(req, timeout=60)
         except HTTPError as e:
             raw = e.read().decode('utf-8', 'replace')[:400]
             sys.stderr.write(f'[gemini] HTTP {e.code}: {raw}\n')
-            # Trả kèm lý do rút gọn để UI chẩn đoán nhanh (không lộ toàn bộ payload).
             detail = self._short_reason(raw) or f'HTTP {e.code}'
             self._json(e.code if e.code == 429 else 502, {'error': 'upstream', 'detail': detail})
+            return
         except Exception as e:
             sys.stderr.write(f'[gemini] lỗi: {e}\n')
             self._json(502, {'error': 'upstream', 'detail': str(e)[:160]})
+            return
+        if is_stream:
+            # Streaming SSE — trả từng dòng ngay khi Google gửi đến để giảm cảm giác chậm.
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/event-stream; charset=utf-8')
+            self.send_header('Cache-Control', 'no-cache')
+            self.end_headers()
+            try:
+                with resp:
+                    for line in resp:
+                        if line[:5] == b'data:':
+                            # Gemini gửi dạng "data: {...}\r\n"; chuẩn hóa về \n cho trình duyệt.
+                            stripped = line.rstrip(b'\r\n') + b'\n'
+                            self.wfile.write(stripped)
+                            self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return
+        with resp:
+            data = json.loads(resp.read().decode('utf-8'))
+        text = data['candidates'][0]['content']['parts'][0]['text']
+        self._json(200, {'answer': text})
 
     @staticmethod
     def _short_reason(raw):

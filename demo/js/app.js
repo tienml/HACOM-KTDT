@@ -66,6 +66,9 @@ const ICONS = {
   factory: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 22h20"/><path d="M6 22V10l6-4 6 4v12"/><path d="M10 14h4v8h-4z"/><path d="M10 10h4"/></svg>',
   bank: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M5 21v-8a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v8"/><path d="M12 3L2 8h20L12 3z"/><path d="M9 21v-6"/><path d="M15 21v-6"/></svg>',
   message: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5 8.5 8.5 0 0 1-3.8-.9L3 21l1.9-5.7A8.38 8.38 0 0 1 4 11.5 8.5 8.5 0 0 1 12.5 3 8.38 8.38 0 0 1 21 11.5z"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>',
+  user: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
+  checks: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 13l4 4L13.5 7"/><path d="M10 13l4 4L22 7"/></svg>',
 };
 
 const STAGE_ICONS = [
@@ -89,7 +92,7 @@ const STAGE_ICONS = [
 
 const NAV_ITEMS = [
   { id: 'assistant', label: 'Trang chủ', icon: ICONS.home },
-  { id: 'ai-assistant', label: 'Chatbot', icon: ICONS.message },
+  { id: 'ai-assistant', label: 'AI Assistant', icon: ICONS.robot },
   { id: 'survey', label: 'Khảo sát & Mục tiêu', icon: ICONS.checklist },
   { id: 'analysis', label: 'Phân tích AI', icon: ICONS.target },
   { id: 'suggest-portfolio', label: 'Gợi ý danh mục', icon: ICONS.hierarchy },
@@ -120,7 +123,15 @@ function loadChat() {
     const raw = localStorage.getItem(CHAT_KEY);
     if (!raw) return [];
     const arr = JSON.parse(raw);
-    return Array.isArray(arr) ? arr.filter((m) => m && (m.role === 'user' || m.role === 'ai') && typeof m.text === 'string') : [];
+    if (!Array.isArray(arr)) return [];
+    return arr.filter((m) => m && (m.role === 'user' || m.role === 'ai') && typeof m.text === 'string').map((m) => ({
+      role: m.role,
+      text: String(m.text),
+      status: m.status || undefined,
+      detail: m.detail || undefined,
+      at: m.at || undefined,
+      typeId: m.typeId || undefined,
+    }));
   } catch (e) { return []; }
 }
 function saveChat(list) {
@@ -150,7 +161,9 @@ const ui = {
   // Gợi ý danh mục đầu tư (so sánh các loại hình + AI xếp hạng)
   portfolio: null,        // { status: 'idle'|'loading'|'ok'|'fallback', ranks: [{id,rank,reason}], reason? }
   // Chatbot: cuộc trò chuyện nhiều lượt với trợ lý AI (không làm thay đổi màn Trang chủ)
-  chat: loadChat(),       // [{role:'user'|'ai', text, status?}]
+  chat: loadChat(),       // [{role:'user'|'ai', text, status?, at?, typeId?}]
+  chatTypeId: null,       // loại dự án nhận diện gần nhất trong chat (để hiển thị sidebar)
+  chatMore: false,        // mở rộng danh sách câu hỏi gợi ý bên phải
 };
 
 const elMain = document.getElementById('main');
@@ -914,15 +927,18 @@ function renderAssistant() {
 }
 
 /* ============================================================
-   Màn Chatbot (ai-assistant) — trò chuyện nhiều lượt với trợ lý AI.
-   - Mỗi câu hỏi được gửi kèm ngữ cảnh tính sẵn từ dữ liệu thực (loại dự án + khảo sát + các giai đoạn),
-     nên câu trả lời luôn bám dữ liệu, không bịa thủ tục.
-   - Không đụng trạng thái của màn Trang chủ (ui.result / lịch sử tư vấn); tin nhắn lưu riêng ở localStorage.
-   - Khi AI lỗi/vắng khóa: hiện note giải thích trong bong bóng, vẫn cho tiếp tục hỏi.
+   Màn AI Assistant (ai-assistant) — chatbot tổng quát qua Gemini.
+   - Với câu hỏi quy trình đầu tư: DỰA CHẶT ngữ cảnh tính sẵn, không bịa thủ tục.
+   - Với câu hỏi xã giao/tổng quát: trả lời tự nhiên như chatbot thực.
+   - Không đụng trạng thái của màn Trang chủ; tin nhắn lưu riêng ở localStorage.
+   - Streaming SSE để giảm cảm giác chậm khi phản hồi dài.
    ============================================================ */
 
-const CHAT_QUICK = [
-  'Quy trình đầu tư nhà ở xã hội gồm những giai đoạn nào?',
+const CHAT_SUGGESTIONS = [
+  'Quy trình đầu tư nhà ở thương mại là gì?',
+  'Giai đoạn chuẩn bị đầu tư gồm những bước nào?',
+  'Hồ sơ cần chuẩn bị ở bước thẩm định dự án?',
+  'Thời gian thực hiện toàn bộ quy trình là bao lâu?',
   'Nhà đầu tư mới nên bắt đầu từ đâu để hạn chế rủi ro pháp lý?',
   'Các bước thường bị "chưa xác định" nhất là gì và vì sao?',
 ];
@@ -951,56 +967,210 @@ function buildChatContext(question) {
   return lines.join('\n');
 }
 
-function chatBubbleHTML(msg) {
-  if (msg.role === 'user') {
-    return `<div class="chat-msg user"><div class="chat-bubble">${esc(msg.text)}</div></div>`;
+function currentChatType() {
+  if (ui.chatTypeId) return D.typeById(ui.chatTypeId);
+  for (let i = ui.chat.length - 1; i >= 0; i--) {
+    if (ui.chat[i].role === 'user' && ui.chat[i].text) return D.identifyType(ui.chat[i].text);
   }
-  // ai
+  return D.typeById('chung');
+}
+
+function fmtChatTime(iso) {
+  if (!iso) return '';
+  try { return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }); }
+  catch (e) { return ''; }
+}
+
+function donutSVG(counts) {
+  const total = (counts.apply + counts.unknown + counts.na) || 1;
+  const segs = [
+    { val: counts.apply, color: 'var(--ok)' },
+    { val: counts.unknown, color: 'var(--warn)' },
+    { val: counts.na, color: 'var(--na)' },
+  ];
+  const R = 34, C = 2 * Math.PI * R;
+  let acc = 0;
+  let circles = '';
+  segs.forEach((s) => {
+    const frac = s.val / total;
+    const dash = frac * C;
+    const off = -acc * C;
+    circles += `<circle cx="50" cy="50" r="${R}" fill="none" stroke="${s.color}" stroke-width="12" stroke-dasharray="${dash} ${C - dash}" stroke-dashoffset="${off}" />`;
+    acc += frac;
+  });
+  return `<svg class="chat-donut" viewBox="0 0 100 100" width="100" height="100"><g transform="rotate(-90 50 50)">${circles}</g></svg>`;
+}
+
+function chatResultCardHTML(typeId) {
+  const type = D.typeById(typeId);
+  const result = D.suggest(type, S.getSurvey());
+  const c = result.counts;
+  return `
+    <div class="chat-result-card" data-type="${esc(typeId)}">
+      <div class="chat-result-title">Tóm tắt kết quả</div>
+      <div class="chat-result-stats">
+        <div class="cr-stat"><span class="cr-num cr-ok">${c.apply}</span><span class="cr-label">Áp dụng</span></div>
+        <div class="cr-stat"><span class="cr-num cr-unknown">${c.unknown}</span><span class="cr-label">Chưa xác định</span></div>
+        <div class="cr-stat"><span class="cr-num cr-na">${c.na}</span><span class="cr-label">Không áp dụng</span></div>
+        <div class="cr-stat"><span class="cr-num">${c.total}</span><span class="cr-label">Tổng số mục</span></div>
+      </div>
+      <div class="chat-result-actions">
+        <button class="btn btn-outline btn-sm" data-action="chat-open-process" data-type="${esc(typeId)}">Xem chi tiết quy trình ${ICONS.chevronRight}</button>
+        <button class="btn btn-outline btn-sm" data-action="chat-copy-summary" data-type="${esc(typeId)}">${ICONS.copy} Copy tóm tắt</button>
+      </div>
+    </div>
+  `;
+}
+
+function chatBubbleHTML(msg) {
+  const isUser = msg.role === 'user';
+  const avatar = isUser
+    ? `<div class="chat-avatar chat-avatar-user">${ICONS.user}</div>`
+    : `<div class="chat-avatar chat-avatar-ai">${ICONS.robot}</div>`;
+  const time = msg.at ? `<span class="chat-time">${fmtChatTime(msg.at)}</span>` : '';
+  const read = isUser ? `<span class="chat-read">${ICONS.checks}</span>` : '';
+  const foot = (time || read) ? `<div class="chat-foot ${isUser ? 'foot-user' : ''}">${time}${read}</div>` : '';
+
+  if (isUser) {
+    return `
+      <div class="chat-msg user">
+        <div class="chat-col">
+          <div class="chat-bubble chat-bubble-user">${esc(msg.text)}</div>
+          ${foot}
+        </div>
+        ${avatar}
+      </div>`;
+  }
+  // AI variants
   if (msg.status === 'loading') {
-    return `<div class="chat-msg ai"><div class="chat-bubble ai-loading"><span class="ai-dot"></span><span class="ai-dot"></span><span class="ai-dot"></span></div></div>`;
+    return `
+      <div class="chat-msg ai">
+        ${avatar}
+        <div class="chat-col">
+          <div class="chat-bubble chat-bubble-ai ai-loading"><span class="ai-dot"></span><span class="ai-dot"></span><span class="ai-dot"></span></div>
+        </div>
+      </div>`;
   }
   if (msg.status === 'nokey') {
-    return `<div class="chat-msg ai"><div class="chat-bubble ai-note">Trợ lý AI chưa bật: máy chủ thiếu <code>GEMINI_API_KEY</code>. Bạn vẫn có thể xem kết quả theo engine quy tắc ở màn Trang chủ.</div></div>`;
+    return `
+      <div class="chat-msg ai">
+        ${avatar}
+        <div class="chat-col">
+          <div class="chat-bubble chat-bubble-ai ai-note">Trợ lý AI chưa bật: máy chủ thiếu <code>GEMINI_API_KEY</code>. Bạn vẫn có thể xem kết quả theo engine quy tắc ở màn Trang chủ.</div>
+          ${foot}
+        </div>
+      </div>`;
   }
   if (msg.status === 'rate') {
-    return `<div class="chat-msg ai"><div class="chat-bubble ai-note">Trợ lý AI đang quá tải (gói miễn phí giới hạn lượt gọi). Thử lại sau ít phút.</div></div>`;
+    return `
+      <div class="chat-msg ai">
+        ${avatar}
+        <div class="chat-col">
+          <div class="chat-bubble chat-bubble-ai ai-note">Trợ lý AI đang quá tải (gói miễn phí giới hạn lượt gọi). Thử lại sau ít phút.</div>
+          ${foot}
+        </div>
+      </div>`;
   }
   if (msg.status === 'error') {
     const detail = msg.detail ? ` — chi tiết: ${esc(msg.detail)}` : '';
-    return `<div class="chat-msg ai"><div class="chat-bubble ai-note">Trợ lý AI tạm thời không phản hồi${detail}. Hãy thử lại.</div></div>`;
+    return `
+      <div class="chat-msg ai">
+        ${avatar}
+        <div class="chat-col">
+          <div class="chat-bubble chat-bubble-ai ai-note">Trợ lý AI tạm thời không phản hồi${detail}. Hãy thử lại.</div>
+          ${foot}
+        </div>
+      </div>`;
   }
-  return `<div class="chat-msg ai"><div class="chat-bubble"><div class="ai-text">${formatAIText(msg.text)}</div><div class="ai-foot">Trợ lý AI (Gemini) — nội dung mang tính tham khảo.</div></div></div>`;
+  // ok
+  const resultCard = (msg.typeId && msg.typeId !== 'chung') ? chatResultCardHTML(msg.typeId) : '';
+  return `
+    <div class="chat-msg ai">
+      ${avatar}
+      <div class="chat-col">
+        <div class="chat-bubble chat-bubble-ai">
+          <div class="ai-text">${formatAIText(msg.text)}</div>
+          ${resultCard}
+        </div>
+        ${foot}
+      </div>
+    </div>`;
+}
+
+function renderChatSide() {
+  const type = currentChatType();
+  const result = D.suggest(type, S.getSurvey());
+  const c = result.counts;
+  const total = c.total || 1;
+  const pctApply = Math.round(c.apply / total * 1000) / 10;
+  const pctUnknown = Math.round(c.unknown / total * 1000) / 10;
+  const pctNa = Math.round(c.na / total * 1000) / 10;
+  const updated = new Date().toLocaleDateString('vi-VN');
+  const suggList = ui.chatMore ? CHAT_SUGGESTIONS : CHAT_SUGGESTIONS.slice(0, 4);
+  return `
+    <div class="card chat-side-card">
+      <div class="chat-side-title">Ngữ cảnh hiện tại</div>
+      <div class="chat-side-type">${typeChip(type, true)}</div>
+      <div class="chat-side-meta">Nguồn: Cấu trúc quy trình đầu tư Hacom</div>
+      <div class="chat-side-meta">Cập nhật: ${updated}</div>
+    </div>
+    <div class="card chat-side-card">
+      <div class="chat-side-title">Thống kê trạng thái</div>
+      <div class="chat-donut-row">
+        ${donutSVG(c)}
+        <div class="chat-legend">
+          <div class="chat-legend-row"><span class="lg-dot lg-apply"></span>Áp dụng (${c.apply})<span class="lg-pct">${pctApply}%</span></div>
+          <div class="chat-legend-row"><span class="lg-dot lg-unknown"></span>Chưa xác định (${c.unknown})<span class="lg-pct">${pctUnknown}%</span></div>
+          <div class="chat-legend-row"><span class="lg-dot lg-na"></span>Không áp dụng (${c.na})<span class="lg-pct">${pctNa}%</span></div>
+        </div>
+      </div>
+      <div class="chat-side-meta">Tổng số mục: ${c.total}</div>
+    </div>
+    <div class="card chat-side-card">
+      <div class="chat-side-title">Câu hỏi gợi ý</div>
+      <div class="chat-suggest-list">
+        ${suggList.map((q) => `<button class="chat-suggest-btn" data-action="chat-chip" data-q="${esc(q)}">${esc(q)}</button>`).join('')}
+      </div>
+      <button class="chat-more-btn" data-action="chat-toggle-more">${ui.chatMore ? 'Thu gọn câu hỏi' : 'Xem thêm câu hỏi'} ${ICONS.chevronDown}</button>
+    </div>
+    <div class="card chat-side-card chat-note-card">
+      <div class="chat-side-title">${ICONS.lightbulb} Lưu ý</div>
+      <div class="chat-note-text">Thiếu thông tin sẽ hiển thị trạng thái "Chưa xác định". AI không tự suy diễn thành "Không áp dụng".</div>
+    </div>
+  `;
 }
 
 function renderChat() {
   const empty = !ui.chat.length;
   const messages = ui.chat.map(chatBubbleHTML).join('');
-  const welcome = empty ? `
-    <div class="chat-msg ai chat-welcome"><div class="chat-bubble">Xin chào! Tôi là trợ lý Hacom AI Invest. Hãy đặt câu hỏi về quy trình đầu tư dự án — tôi sẽ trả lời dựa trên dữ liệu quy trình thực và khảo sát của bạn.</div></div>
-    <div class="chat-quick">
-      <div class="quick-label">Gợi ý câu hỏi:</div>
-      <div class="quick-chips">
-        ${CHAT_QUICK.map((q) => `<button class="chip-chat" data-action="chat-chip" data-q="${esc(q)}">${esc(q)}</button>`).join('')}
-      </div>
-    </div>
-  ` : '';
+  const welcome = empty ? chatBubbleHTML({ role: 'ai', text: 'Xin chào! Tôi là trợ lý Hacom AI Invest. Hãy đặt câu hỏi về quy trình đầu tư dự án — tôi sẽ trả lời dựa trên dữ liệu quy trình thực và khảo sát của bạn.' }) : '';
   return `
-    <div class="page-head page-head-row">
-      <div>
-        <h1>Chatbot</h1>
-        <p class="page-sub">Trò chuyện nhiều lượt với trợ lý AI về quy trình đầu tư</p>
-      </div>
-      <button class="btn btn-outline btn-sm" data-action="chat-clear" ${empty ? 'disabled' : ''}>Xóa cuộc trò chuyện</button>
+    <div class="page-head">
+      <h1>AI Assistant</h1>
+      <p class="page-sub">Hỏi AI về quy trình đầu tư và nhận gợi ý chi tiết, chính xác</p>
     </div>
-    <div class="card chat-card">
-      <div class="chat-box" id="chat-box">
-        ${welcome}
-        ${messages}
+    <div class="content-grid">
+      <div class="content-main">
+        <div class="card chat-card">
+          <div class="chat-head">
+            <button class="btn btn-outline btn-sm" data-action="chat-clear" ${empty ? 'disabled' : ''}>${ICONS.trash} Xóa cuộc trò chuyện</button>
+          </div>
+          <div class="chat-box" id="chat-box">
+            ${welcome}
+            ${messages}
+          </div>
+          <div class="chat-composer">
+            <div class="chat-composer-row">
+              <input class="chat-input" id="chat-input" placeholder="Nhập câu hỏi của bạn... (Enter để gửi)" autocomplete="off" data-action="chat-input">
+              <button class="chat-send-btn" data-action="chat-send" aria-label="Gửi">${ICONS.send}</button>
+            </div>
+            <div class="chat-disclaimer">AI có thể mắc sai sót. Hãy tham khảo thêm trước khi quyết định.</div>
+          </div>
+        </div>
       </div>
-      <div class="chat-composer">
-        <input class="chat-input" id="chat-input" placeholder="Nhập câu hỏi của bạn... (Enter để gửi)" autocomplete="off" data-action="chat-input">
-        <button class="btn btn-primary" data-action="chat-send">${ICONS.send} Gửi</button>
-      </div>
+      <aside class="content-side">
+        ${renderChatSide()}
+      </aside>
     </div>
   `;
 }
@@ -1010,25 +1180,64 @@ function chatScrollBottom() {
   if (box) box.scrollTop = box.scrollHeight;
 }
 
+function renderChatSideInto() {
+  const aside = elMain.querySelector('.content-side');
+  if (aside) aside.innerHTML = renderChatSide();
+}
+
+async function streamChatText(res, loadingBubble) {
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  let full = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let nl;
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (!line.startsWith('data:')) continue;
+      const payload = line.slice(5).trim();
+      if (!payload || payload === '[DONE]') continue;
+      try {
+        const obj = JSON.parse(payload);
+        const part = obj.candidates && obj.candidates[0] && obj.candidates[0].content
+          && obj.candidates[0].content.parts && obj.candidates[0].content.parts[0];
+        const t = part && typeof part.text === 'string' ? part.text : '';
+        if (t) {
+          full += t;
+          if (loadingBubble) {
+            loadingBubble.classList.remove('ai-loading');
+            loadingBubble.innerHTML = `<div class="ai-text">${formatAIText(full)}</div>`;
+            chatScrollBottom();
+          }
+        }
+      } catch (e) { /* dòng không phải JSON -> bỏ qua */ }
+    }
+  }
+  return full;
+}
+
 let chatSeq = 0;
 async function sendChat(text) {
   const q = String(text || '').trim();
   if (!q) return;
   const seq = ++chatSeq;
-  pushChat({ role: 'user', text: q });
-  // Gắn trực tiếp vào DOM để giữ focus ô nhập và không dựng lại toàn bộ màn hình
+  const type = D.identifyType(q);
+  const nowIso = new Date().toISOString();
+  pushChat({ role: 'user', text: q, at: nowIso });
   const box = document.getElementById('chat-box');
   if (box) {
-    const quick = box.querySelector('.chat-quick');
-    if (quick) quick.remove();
-    box.insertAdjacentHTML('beforeend', chatBubbleHTML({ role: 'user', text: q }));
+    box.insertAdjacentHTML('beforeend', chatBubbleHTML({ role: 'user', text: q, at: nowIso }));
     box.insertAdjacentHTML('beforeend', chatBubbleHTML({ role: 'ai', status: 'loading' }));
     chatScrollBottom();
   }
-  const loadingEl = box ? box.querySelector('.chat-msg.ai:last-child .chat-bubble') : null;
+  const loadingBubble = box ? box.querySelector('.chat-msg.ai:last-child .chat-bubble') : null;
   let next;
   try {
-    const res = await fetch('/api/ask', {
+    const res = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ question: q, context: buildChatContext(q) }),
@@ -1038,22 +1247,26 @@ async function sendChat(text) {
     else if (res.status === 429) next = { role: 'ai', status: 'rate', text: '' };
     else if (!res.ok) {
       let detail = '';
-      try { const d = await res.json(); detail = d && d.detail ? String(d.detail) : ''; } catch (e) { /* bỏ qua */ }
+      try { const d = await res.json(); detail = d && d.detail ? String(d.detail) : ''; } catch (e) {}
       if (seq !== chatSeq) return;
       next = { role: 'ai', status: 'error', text: '', detail };
     } else {
-      const data = await res.json();
+      const streamed = await streamChatText(res, loadingBubble);
       if (seq !== chatSeq) return;
-      next = data && data.answer ? { role: 'ai', status: 'ok', text: data.answer } : { role: 'ai', status: 'error', text: '' };
+      next = streamed ? { role: 'ai', status: 'ok', text: streamed } : { role: 'ai', status: 'error', text: '' };
     }
   } catch (e) {
     if (seq !== chatSeq) return;
     next = { role: 'ai', status: 'error', text: '' };
   }
+  next.at = new Date().toISOString();
+  next.typeId = type.id;
+  ui.chatTypeId = type.id;
   pushChat(next);
-  if (loadingEl && loadingEl.parentElement) {
-    loadingEl.parentElement.outerHTML = chatBubbleHTML(next);
+  if (loadingBubble && loadingBubble.closest('.chat-msg')) {
+    loadingBubble.closest('.chat-msg').outerHTML = chatBubbleHTML(next);
     chatScrollBottom();
+    renderChatSideInto();
   } else {
     render();
   }
@@ -1061,8 +1274,9 @@ async function sendChat(text) {
 
 function clearChat() {
   ui.chat = [];
+  ui.chatTypeId = null;
   saveChat(ui.chat);
-  chatSeq++; // hủy các phản hồi đang chờ của phiên cũ
+  chatSeq++;
   render();
   toast('Đã xóa cuộc trò chuyện.');
 }
@@ -1828,6 +2042,27 @@ document.addEventListener('click', (e) => {
   }
   if (action === 'chat-clear') {
     clearChat();
+    return;
+  }
+  if (action === 'chat-toggle-more') {
+    ui.chatMore = !ui.chatMore;
+    renderChatSideInto();
+    return;
+  }
+  if (action === 'chat-open-process') {
+    const t = D.typeById(target.dataset.type);
+    ui.result = D.suggest(t, S.getSurvey());
+    ui.query = '';
+    ui.view = 'process';
+    ui.activeNav = 'process';
+    ui.soon = null;
+    render();
+    return;
+  }
+  if (action === 'chat-copy-summary') {
+    const t = D.typeById(target.dataset.type);
+    ui.result = D.suggest(t, S.getSurvey());
+    copySummary();
     return;
   }
   if (action === 'run-portfolio') {
