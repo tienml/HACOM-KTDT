@@ -113,22 +113,6 @@ a { color: var(--primary); }
 
 .side-foot { margin-top: auto; display: flex; flex-direction: column; gap: 14px; }
 
-.ai-card {
-  background: var(--primary-50);
-  border: 1px solid var(--primary-line);
-  border-radius: var(--radius);
-  padding: 14px;
-}
-.ai-card-head {
-  display: inline-flex; align-items: center; gap: 6px;
-  font-size: 12.5px; font-weight: 700; color: var(--primary-strong);
-  background: var(--primary-100);
-  border-radius: 8px;
-  padding: 4px 10px;
-}
-.ai-card-head svg { width: 14px; height: 14px; color: var(--primary); }
-.ai-card-body { margin: 10px 0 12px; font-size: 12.5px; color: var(--muted); }
-
 .side-watermark {
   display: flex;
   justify-content: center;
@@ -808,12 +792,34 @@ a { color: var(--primary); }
 .tour-x:hover { color: var(--ink); }
 .tour-hint { font-size: 11.5px; color: var(--faint); margin-top: 10px; text-align: center; }
 
+/* ---------------- Phân tích của trợ lý AI (LLM) ---------------- */
+
+.ai-answer { border-left: 3px solid var(--primary); padding: 16px 18px; }
+.ai-answer-head {
+  display: inline-flex; align-items: center; gap: 7px;
+  font-size: 12.5px; font-weight: 700; color: var(--primary-strong);
+}
+.ai-answer-head svg { width: 16px; height: 16px; color: var(--primary); }
+.ai-answer-body { margin-top: 10px; font-size: 13.5px; line-height: 1.65; color: var(--ink); }
+.ai-text code, .ai-note code {
+  background: var(--primary-50); color: var(--primary-strong);
+  padding: 1px 6px; border-radius: 5px; font-size: 12px;
+}
+.ai-foot { margin-top: 10px; font-size: 11.5px; color: var(--faint); }
+.ai-note { font-size: 13px; color: var(--muted); line-height: 1.6; }
+.ai-loading { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+.ai-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--primary); opacity: .35; animation: ai-pulse 1s ease-in-out infinite; }
+.ai-dot:nth-child(2) { animation-delay: .15s; }
+.ai-dot:nth-child(3) { animation-delay: .3s; }
+@keyframes ai-pulse { 0%, 80%, 100% { opacity: .3; transform: scale(.85); } 40% { opacity: 1; transform: scale(1); } }
+@media (prefers-reduced-motion: reduce) { .ai-dot { animation: none; opacity: .7; } }
+
 /* ---------------- In ấn ---------------- */
 
 @media print {
   body { background: #fff; }
   .sidebar, .ask-card, .quick-row, .toolbar, .table-foot, .note-card,
-  .ai-card, .toast-wrap, .modal-backdrop, .switch-row, .detail-link,
+  .toast-wrap, .modal-backdrop, .switch-row, .detail-link,
   .why-btn, .search-box, .proc-tools, .btn, .empty, .tour-fab, #tour-root { display: none !important; }
   .app { grid-template-columns: 1fr; }
   .main { padding: 0; }

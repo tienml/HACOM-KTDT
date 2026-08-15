@@ -198,8 +198,10 @@ function ask(query, typeId) {
   ui.search = '';
   ui.detailStageId = null;
   ui.modalSummary = false;
+  ui.aiAnswer = { status: 'loading' };
   S.addHistory({ query: query || type.label, typeId: type.id, typeLabel: type.label, counts: result.counts });
   render();
+  requestAIAnalysis();
 }
 
 function summaryText(result, beginner) {
@@ -235,6 +237,79 @@ async function copySummary() {
     ta.remove();
     toast('Đã sao chép tóm tắt (fallback)', true);
   }
+}
+
+/* ============================================================
+   Trợ lý AI nâng cao (LLM qua /api/ask — Gemini miễn phí)
+   - Server gọi model từ biến môi trường GEMINI_API_KEY. Thiếu khóa -> 503, UI hiện note cấu hình.
+   - Kết quả quy tắc vẫn là xương sống; LLM chỉ thêm phân tích bằng ngôn ngữ tự nhiên dựa trên ngữ cảnh đã tính sẵn.
+   ============================================================ */
+
+function buildAIContext(result) {
+  const type = D.typeById(result.typeId);
+  const lines = [`Loại dự án: ${type.label}`, type.intro, ''];
+  result.stages.forEach((st, i) => {
+    const label = st.status === APPLY.YES ? 'Áp dụng' : st.status === APPLY.UNKNOWN ? 'Chưa xác định' : 'Không áp dụng';
+    lines.push(`${i + 1}. ${st.node.name} [${label}] (${st.duration}): ${st.desc}`);
+  });
+  lines.push('');
+  lines.push(`Thống kê: áp dụng ${result.counts.apply}, chưa xác định ${result.counts.unknown}, không áp dụng ${result.counts.na} (tổng ${result.counts.total}).`);
+  return lines.join('\n');
+}
+
+function formatAIText(text) {
+  return esc(text)
+    .replace(/^[•\-*]\s*/gm, '• ')
+    .replace(/\n/g, '<br>');
+}
+
+function aiAnswerHTML() {
+  const a = ui.aiAnswer;
+  if (!a) return '';
+  if (a.status === 'loading') {
+    return `<div class="ai-loading"><span class="ai-dot"></span><span class="ai-dot"></span><span class="ai-dot"></span> Trợ lý AI đang phân tích câu hỏi...</div>`;
+  }
+  if (a.status === 'nokey') {
+    return `<div class="ai-note">Trợ lý AI nâng cao chưa bật: máy chủ thiếu khóa <code>GEMINI_API_KEY</code> (thêm trong Railway → Variables). Bảng kết quả theo quy tắc bên dưới vẫn đầy đủ.</div>`;
+  }
+  if (a.status === 'rate') {
+    return `<div class="ai-note">Trợ lý AI nâng cao đang quá tải (gói miễn phí giới hạn lượt gọi). Thử lại sau ít phút — kết quả quy tắc bên dưới vẫn chính xác.</div>`;
+  }
+  if (a.status === 'error') {
+    return `<div class="ai-note">Trợ lý AI nâng cao tạm thời không khả dụng. Kết quả quy tắc bên dưới vẫn đầy đủ.</div>`;
+  }
+  return `<div class="ai-text">${formatAIText(a.text)}</div>
+    <div class="ai-foot">Trợ lý AI (Gemini) — nội dung mang tính tham khảo, đối chiếu bảng chi tiết bên dưới.</div>`;
+}
+
+let aiSeq = 0;
+async function requestAIAnalysis() {
+  const seq = ++aiSeq;
+  const result = ui.result;
+  if (!result) return;
+  const question = ui.query || `Quy trình đầu tư ${D.typeById(result.typeId).label}`;
+  try {
+    const res = await fetch('/api/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question, context: buildAIContext(result) }),
+    });
+    if (seq !== aiSeq) return;
+    if (res.status === 503) ui.aiAnswer = { status: 'nokey' };
+    else if (res.status === 429) ui.aiAnswer = { status: 'rate' };
+    else if (!res.ok) ui.aiAnswer = { status: 'error' };
+    else {
+      const data = await res.json();
+      if (seq !== aiSeq) return;
+      ui.aiAnswer = data && data.answer ? { status: 'ok', text: data.answer } : { status: 'error' };
+    }
+  } catch (e) {
+    if (seq !== aiSeq) return;
+    ui.aiAnswer = { status: 'error' };
+  }
+  // Patch trực tiếp vào card để không làm mất focus khi người dùng đang thao tác ở màn khác
+  const body = document.querySelector('.ai-answer-body');
+  if (body) body.innerHTML = aiAnswerHTML();
 }
 
 function renderAssistant() {
@@ -283,6 +358,13 @@ function renderAssistant() {
     </div>
   `;
 
+  const aiCard = hasResult ? `
+    <div class="card ai-answer">
+      <div class="ai-answer-head">${ICONS.robot} Phân tích của trợ lý AI</div>
+      <div class="ai-answer-body">${aiAnswerHTML()}</div>
+    </div>
+  ` : '';
+
   return `
     <div class="page-head page-head-row">
       <div>
@@ -320,6 +402,7 @@ function renderAssistant() {
           </div>
         </div>
         ${resultCard}
+        ${aiCard}
         ${tableCard}
       </div>
       <aside class="content-side">
@@ -946,18 +1029,6 @@ document.addEventListener('click', (e) => {
       ui.modalSummary = false;
     }
     render();
-    return;
-  }
-  if (action === 'go-ask') {
-    ui.view = 'assistant';
-    ui.activeNav = 'ai-assistant';
-    ui.soon = null;
-    ui.detailStageId = null;
-    render();
-    requestAnimationFrame(() => {
-      const inp = document.getElementById('ask-input');
-      if (inp) inp.focus();
-    });
     return;
   }
   if (action === 'ask-send') {
