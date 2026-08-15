@@ -880,6 +880,58 @@ a { color: var(--primary); }
 }
 .pf-ai-reason { color: var(--ink-2); }
 
+/* ============================================================
+   Chatbot — hộp trò chuyện nhiều lượt
+   ============================================================ */
+.chat-card { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
+.chat-box {
+  flex: 1 1 auto; min-height: 420px; max-height: calc(100vh - 230px);
+  overflow-y: auto; padding: 20px;
+  display: flex; flex-direction: column; gap: 12px;
+  background: var(--bg);
+}
+.chat-msg { display: flex; }
+.chat-msg.user { justify-content: flex-end; }
+.chat-msg.ai { justify-content: flex-start; }
+.chat-bubble {
+  max-width: 78%; padding: 11px 14px; border-radius: 14px;
+  font-size: 13.5px; line-height: 1.6; word-break: break-word;
+  border: 1px solid var(--line);
+}
+.chat-msg.user .chat-bubble {
+  background: var(--primary); color: #fff; border-color: var(--primary);
+  border-bottom-right-radius: 4px;
+}
+.chat-msg.ai .chat-bubble {
+  background: var(--surface); color: var(--ink);
+  border-bottom-left-radius: 4px; box-shadow: var(--shadow-sm, 0 1px 2px rgba(20,24,40,.04));
+}
+.chat-msg.ai .chat-bubble .ai-text { font-size: 13.5px; }
+.chat-msg.ai .chat-bubble .ai-foot { margin-top: 8px; font-size: 11.5px; }
+.chat-msg.ai .chat-bubble.ai-note { color: var(--muted); }
+.chat-msg.ai .chat-bubble.ai-loading { display: inline-flex; align-items: center; gap: 5px; padding: 13px 16px; }
+.chat-quick { padding: 4px 2px; }
+.chip-chat {
+  display: block; width: 100%; text-align: left;
+  padding: 9px 12px; margin-top: 8px;
+  border: 1px solid var(--primary-line, #d8cdfb); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--ink-2);
+  font-size: 12.5px; line-height: 1.5; cursor: pointer;
+  transition: background .12s, border-color .12s;
+}
+.chip-chat:first-of-type { margin-top: 0; }
+.chip-chat:hover { background: var(--primary-50); border-color: var(--primary); color: var(--primary-strong); }
+.chat-composer {
+  display: flex; gap: 10px; padding: 14px 16px;
+  border-top: 1px solid var(--line); background: var(--surface);
+}
+.chat-input {
+  flex: 1; padding: 11px 14px; font-size: 14px;
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--bg); color: var(--ink); outline: none;
+}
+.chat-input:focus { border-color: var(--primary); background: var(--surface); box-shadow: 0 0 0 3px var(--primary-100); }
+
 /* ---------------- In ấn ---------------- */
 
 @media print {

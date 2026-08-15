@@ -65,6 +65,7 @@ const ICONS = {
   chart: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>',
   factory: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 22h20"/><path d="M6 22V10l6-4 6 4v12"/><path d="M10 14h4v8h-4z"/><path d="M10 10h4"/></svg>',
   bank: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M5 21v-8a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v8"/><path d="M12 3L2 8h20L12 3z"/><path d="M9 21v-6"/><path d="M15 21v-6"/></svg>',
+  message: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5 8.5 8.5 0 0 1-3.8-.9L3 21l1.9-5.7A8.38 8.38 0 0 1 4 11.5 8.5 8.5 0 0 1 12.5 3 8.38 8.38 0 0 1 21 11.5z"/></svg>',
 };
 
 const STAGE_ICONS = [
@@ -88,7 +89,7 @@ const STAGE_ICONS = [
 
 const NAV_ITEMS = [
   { id: 'assistant', label: 'Trang chủ', icon: ICONS.home },
-  { id: 'ai-assistant', label: 'AI Assistant', icon: ICONS.robot },
+  { id: 'ai-assistant', label: 'Chatbot', icon: ICONS.message },
   { id: 'survey', label: 'Khảo sát & Mục tiêu', icon: ICONS.checklist },
   { id: 'analysis', label: 'Phân tích AI', icon: ICONS.target },
   { id: 'suggest-portfolio', label: 'Gợi ý danh mục', icon: ICONS.hierarchy },
@@ -99,7 +100,7 @@ const NAV_ITEMS = [
 // Map view → thực tế hiển thị (một số màn chưa triển khai trong bản demo)
 const VIEW_REAL = {
   'assistant': 'assistant',
-  'ai-assistant': 'assistant',
+  'ai-assistant': 'chat',
   'survey': 'survey',
   'process': 'process',
   'history': 'history',
@@ -109,6 +110,27 @@ const VIEW_REAL = {
 /* ============================================================
    Trạng thái UI
    ============================================================ */
+
+/* Lưu trữ riêng cho cuộc trò chuyện chatbot (tách khỏi HacomStore để không đụng lịch sử tư vấn).
+   Chỉ giữ các tin nhắn đã hoàn tất; giới hạn 60 tin gần nhất. */
+const CHAT_KEY = 'hacom-ktdt-chat-v1';
+const MAX_CHAT = 60;
+function loadChat() {
+  try {
+    const raw = localStorage.getItem(CHAT_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr.filter((m) => m && (m.role === 'user' || m.role === 'ai') && typeof m.text === 'string') : [];
+  } catch (e) { return []; }
+}
+function saveChat(list) {
+  try { localStorage.setItem(CHAT_KEY, JSON.stringify(list.slice(-MAX_CHAT))); } catch (e) { /* bỏ qua */ }
+}
+function pushChat(msg) {
+  ui.chat.push(msg);
+  if (ui.chat.length > MAX_CHAT) ui.chat = ui.chat.slice(-MAX_CHAT);
+  saveChat(ui.chat);
+}
 
 const ui = {
   view: 'assistant',
@@ -127,6 +149,8 @@ const ui = {
   modalSummary: false,
   // Gợi ý danh mục đầu tư (so sánh các loại hình + AI xếp hạng)
   portfolio: null,        // { status: 'idle'|'loading'|'ok'|'fallback', ranks: [{id,rank,reason}], reason? }
+  // Chatbot: cuộc trò chuyện nhiều lượt với trợ lý AI (không làm thay đổi màn Trang chủ)
+  chat: loadChat(),       // [{role:'user'|'ai', text, status?}]
 };
 
 const elMain = document.getElementById('main');
@@ -889,6 +913,160 @@ function renderAssistant() {
   `;
 }
 
+/* ============================================================
+   Màn Chatbot (ai-assistant) — trò chuyện nhiều lượt với trợ lý AI.
+   - Mỗi câu hỏi được gửi kèm ngữ cảnh tính sẵn từ dữ liệu thực (loại dự án + khảo sát + các giai đoạn),
+     nên câu trả lời luôn bám dữ liệu, không bịa thủ tục.
+   - Không đụng trạng thái của màn Trang chủ (ui.result / lịch sử tư vấn); tin nhắn lưu riêng ở localStorage.
+   - Khi AI lỗi/vắng khóa: hiện note giải thích trong bong bóng, vẫn cho tiếp tục hỏi.
+   ============================================================ */
+
+const CHAT_QUICK = [
+  'Quy trình đầu tư nhà ở xã hội gồm những giai đoạn nào?',
+  'Nhà đầu tư mới nên bắt đầu từ đâu để hạn chế rủi ro pháp lý?',
+  'Các bước thường bị "chưa xác định" nhất là gì và vì sao?',
+];
+
+/** Ngữ cảnh cho một câu hỏi chat: nhận diện loại dự án từ câu hỏi, tính gợi ý quy trình cục bộ
+ *  (không ghi vào ui.result), rồi dựng văn bản giống buildAIContext + khảo sát. */
+function buildChatContext(question) {
+  const profile = S.getSurvey();
+  const type = D.identifyType(question || '');
+  const result = D.suggest(type, profile);
+  const lines = [`Loại dự án (nhận diện từ câu hỏi): ${type.label}`, type.intro, ''];
+  result.stages.forEach((st, i) => {
+    lines.push(`${i + 1}. ${st.node.name} [${statusLabel(st.status)}] (${st.duration}): ${st.desc}`);
+  });
+  lines.push('');
+  lines.push(`Thống kê: áp dụng ${result.counts.apply}, chưa xác định ${result.counts.unknown}, không áp dụng ${result.counts.na} (tổng ${result.counts.total}).`);
+  const answered = D.PROFILE_FIELDS.filter((f) => profile[f.id] && profile[f.id] !== 'chua_xac_dinh');
+  if (answered.length) {
+    lines.push('', 'KHẢO SÁT NHÀ ĐẦU TƯ:');
+    answered.forEach((f) => {
+      const opts = f.options || D.YESNO_OPTIONS;
+      const label = (opts.find((o) => o.value === profile[f.id]) || {}).label || profile[f.id];
+      lines.push(`- ${f.label}: ${label}`);
+    });
+  }
+  return lines.join('\n');
+}
+
+function chatBubbleHTML(msg) {
+  if (msg.role === 'user') {
+    return `<div class="chat-msg user"><div class="chat-bubble">${esc(msg.text)}</div></div>`;
+  }
+  // ai
+  if (msg.status === 'loading') {
+    return `<div class="chat-msg ai"><div class="chat-bubble ai-loading"><span class="ai-dot"></span><span class="ai-dot"></span><span class="ai-dot"></span></div></div>`;
+  }
+  if (msg.status === 'nokey') {
+    return `<div class="chat-msg ai"><div class="chat-bubble ai-note">Trợ lý AI chưa bật: máy chủ thiếu <code>GEMINI_API_KEY</code>. Bạn vẫn có thể xem kết quả theo engine quy tắc ở màn Trang chủ.</div></div>`;
+  }
+  if (msg.status === 'rate') {
+    return `<div class="chat-msg ai"><div class="chat-bubble ai-note">Trợ lý AI đang quá tải (gói miễn phí giới hạn lượt gọi). Thử lại sau ít phút.</div></div>`;
+  }
+  if (msg.status === 'error') {
+    const detail = msg.detail ? ` — chi tiết: ${esc(msg.detail)}` : '';
+    return `<div class="chat-msg ai"><div class="chat-bubble ai-note">Trợ lý AI tạm thời không phản hồi${detail}. Hãy thử lại.</div></div>`;
+  }
+  return `<div class="chat-msg ai"><div class="chat-bubble"><div class="ai-text">${formatAIText(msg.text)}</div><div class="ai-foot">Trợ lý AI (Gemini) — nội dung mang tính tham khảo.</div></div></div>`;
+}
+
+function renderChat() {
+  const empty = !ui.chat.length;
+  const messages = ui.chat.map(chatBubbleHTML).join('');
+  const welcome = empty ? `
+    <div class="chat-msg ai chat-welcome"><div class="chat-bubble">Xin chào! Tôi là trợ lý Hacom AI Invest. Hãy đặt câu hỏi về quy trình đầu tư dự án — tôi sẽ trả lời dựa trên dữ liệu quy trình thực và khảo sát của bạn.</div></div>
+    <div class="chat-quick">
+      <div class="quick-label">Gợi ý câu hỏi:</div>
+      <div class="quick-chips">
+        ${CHAT_QUICK.map((q) => `<button class="chip-chat" data-action="chat-chip" data-q="${esc(q)}">${esc(q)}</button>`).join('')}
+      </div>
+    </div>
+  ` : '';
+  return `
+    <div class="page-head page-head-row">
+      <div>
+        <h1>Chatbot</h1>
+        <p class="page-sub">Trò chuyện nhiều lượt với trợ lý AI về quy trình đầu tư</p>
+      </div>
+      <button class="btn btn-outline btn-sm" data-action="chat-clear" ${empty ? 'disabled' : ''}>Xóa cuộc trò chuyện</button>
+    </div>
+    <div class="card chat-card">
+      <div class="chat-box" id="chat-box">
+        ${welcome}
+        ${messages}
+      </div>
+      <div class="chat-composer">
+        <input class="chat-input" id="chat-input" placeholder="Nhập câu hỏi của bạn... (Enter để gửi)" autocomplete="off" data-action="chat-input">
+        <button class="btn btn-primary" data-action="chat-send">${ICONS.send} Gửi</button>
+      </div>
+    </div>
+  `;
+}
+
+function chatScrollBottom() {
+  const box = document.getElementById('chat-box');
+  if (box) box.scrollTop = box.scrollHeight;
+}
+
+let chatSeq = 0;
+async function sendChat(text) {
+  const q = String(text || '').trim();
+  if (!q) return;
+  const seq = ++chatSeq;
+  pushChat({ role: 'user', text: q });
+  // Gắn trực tiếp vào DOM để giữ focus ô nhập và không dựng lại toàn bộ màn hình
+  const box = document.getElementById('chat-box');
+  if (box) {
+    const quick = box.querySelector('.chat-quick');
+    if (quick) quick.remove();
+    box.insertAdjacentHTML('beforeend', chatBubbleHTML({ role: 'user', text: q }));
+    box.insertAdjacentHTML('beforeend', chatBubbleHTML({ role: 'ai', status: 'loading' }));
+    chatScrollBottom();
+  }
+  const loadingEl = box ? box.querySelector('.chat-msg.ai:last-child .chat-bubble') : null;
+  let next;
+  try {
+    const res = await fetch('/api/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: q, context: buildChatContext(q) }),
+    });
+    if (seq !== chatSeq) return;
+    if (res.status === 503) next = { role: 'ai', status: 'nokey', text: '' };
+    else if (res.status === 429) next = { role: 'ai', status: 'rate', text: '' };
+    else if (!res.ok) {
+      let detail = '';
+      try { const d = await res.json(); detail = d && d.detail ? String(d.detail) : ''; } catch (e) { /* bỏ qua */ }
+      if (seq !== chatSeq) return;
+      next = { role: 'ai', status: 'error', text: '', detail };
+    } else {
+      const data = await res.json();
+      if (seq !== chatSeq) return;
+      next = data && data.answer ? { role: 'ai', status: 'ok', text: data.answer } : { role: 'ai', status: 'error', text: '' };
+    }
+  } catch (e) {
+    if (seq !== chatSeq) return;
+    next = { role: 'ai', status: 'error', text: '' };
+  }
+  pushChat(next);
+  if (loadingEl && loadingEl.parentElement) {
+    loadingEl.parentElement.outerHTML = chatBubbleHTML(next);
+    chatScrollBottom();
+  } else {
+    render();
+  }
+}
+
+function clearChat() {
+  ui.chat = [];
+  saveChat(ui.chat);
+  chatSeq++; // hủy các phản hồi đang chờ của phiên cũ
+  render();
+  toast('Đã xóa cuộc trò chuyện.');
+}
+
 function renderTable(result) {
   const stages = filterStages(result.stages, ui.filter, ui.search);
   const rows = stages.length ? stages.map((st, i) => {
@@ -1425,8 +1603,8 @@ function reopenHistory(item) {
   ui.proposal = p
     ? (p.status === 'ok' ? { status: 'ok', stages: reviveStages(p.stages) } : p)
     : { status: 'fallback', reason: 'error' };
-  ui.activeNav = 'ai-assistant';
-  ui.view = VIEW_REAL['ai-assistant'];
+  ui.activeNav = 'assistant';
+  ui.view = 'assistant';
   ui.soon = null;
   render();
 }
@@ -1467,6 +1645,9 @@ function render() {
     elMain.innerHTML = renderUnknownView();
   } else if (ui.view === 'assistant') {
     elMain.innerHTML = renderAssistant();
+  } else if (ui.view === 'chat') {
+    elMain.innerHTML = renderChat();
+    chatScrollBottom();
   } else if (ui.view === 'process') {
     elMain.innerHTML = renderProcess();
   } else if (ui.view === 'survey') {
@@ -1531,7 +1712,7 @@ document.addEventListener('click', (e) => {
   if (action === 'back-assistant') {
     ui.detailStageId = null;
     ui.view = 'assistant';
-    ui.activeNav = 'ai-assistant';
+    ui.activeNav = 'assistant';
     ui.soon = null;
     render();
     return;
@@ -1550,7 +1731,7 @@ document.addEventListener('click', (e) => {
   }
   if (action === 'view-unknown') {
     ui.view = 'unknown';
-    ui.activeNav = 'ai-assistant';
+    ui.activeNav = 'assistant';
     ui.soon = null;
     ui.whyOpen.clear();
     render();
@@ -1633,6 +1814,22 @@ document.addEventListener('click', (e) => {
     else ask(target.dataset.query || '', target.dataset.type); // dòng cũ chưa có snapshot thì phân tích lại
     return;
   }
+  if (action === 'chat-send') {
+    const inp = document.getElementById('chat-input');
+    const q = (inp?.value || '').trim();
+    if (!q) { toast('Hãy nhập câu hỏi trước khi gửi.'); return; }
+    if (inp) inp.value = '';
+    sendChat(q);
+    return;
+  }
+  if (action === 'chat-chip') {
+    sendChat(target.dataset.q);
+    return;
+  }
+  if (action === 'chat-clear') {
+    clearChat();
+    return;
+  }
   if (action === 'run-portfolio') {
     requestPortfolio();
     return;
@@ -1682,6 +1879,18 @@ function bindLocalHandlers() {
     if (document.activeElement === askInput) {
       requestAnimationFrame(() => askInput.focus());
     }
+  }
+  const chatInput = document.getElementById('chat-input');
+  if (chatInput) {
+    chatInput.onkeydown = (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const q = chatInput.value.trim();
+        if (!q) return;
+        chatInput.value = '';
+        sendChat(q);
+      }
+    };
   }
   const tableSearch = elMain.querySelector('.table-card input[data-action="search-table"]');
   if (tableSearch) {
