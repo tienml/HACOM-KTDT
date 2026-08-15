@@ -358,7 +358,7 @@ function renderTable(result) {
         </td>
         <td class="stage-desc-cell">${esc(st.desc)}</td>
         <td>${pill(st.status, false)}</td>
-        <td style="text-align:right"><button class="detail-link" data-action="open-detail" data-stage="${st.node.id}">Xem chi tiết &rsaquo;</button></td>
+        <td><button class="detail-link" data-action="open-detail" data-stage="${st.node.id}">Xem chi tiết &rsaquo;</button></td>
       </tr>
     `;
   }).join('') : `<tr><td colspan="4" class="empty">Không có giai đoạn phù hợp với bộ lọc hiện tại.</td></tr>`;
@@ -389,7 +389,7 @@ function renderTable(result) {
               <th>Giai đoạn / Bước chính</th>
               <th>Mô tả ngắn</th>
               <th>Trạng thái</th>
-              <th style="text-align:right">Thao tác</th>
+              <th>Thao tác</th>
             </tr>
           </thead>
           <tbody>${rows}</tbody>
