@@ -199,9 +199,18 @@ function ask(query, typeId) {
   ui.detailStageId = null;
   ui.modalSummary = false;
   ui.aiAnswer = { status: 'loading' };
+  // Bảng quy trình giờ do LLM đề xuất: hiện trạng thái đang phân tích, fallback về quy tắc khi lỗi
+  ui.proposal = { status: 'loading', first: true };
   S.addHistory({ query: query || type.label, typeId: type.id, typeLabel: type.label, counts: result.counts });
   render();
   requestAIAnalysis();
+  requestProposal();
+}
+
+function statusLabel(status) {
+  if (status === APPLY.YES) return 'Áp dụng';
+  if (status === APPLY.UNKNOWN) return 'Chưa xác định';
+  return 'Không áp dụng';
 }
 
 function summaryText(result, beginner) {
@@ -212,8 +221,7 @@ function summaryText(result, beginner) {
   lines.push(beginner && type.beginnerIntro ? type.beginnerIntro : type.intro);
   lines.push('');
   result.stages.forEach((st, i) => {
-    const statusLabel = st.status === APPLY.YES ? 'Áp dụng' : st.status === APPLY.UNKNOWN ? 'Chưa xác định' : 'Không áp dụng';
-    lines.push(`${i + 1}. ${st.node.name} — ${statusLabel} (${st.duration})`);
+    lines.push(`${i + 1}. ${st.node.name} — ${statusLabel(st.status)} (${st.duration})`);
     if (beginner && st.beginner) lines.push(`   Giải thích: ${st.beginner}`);
   });
   lines.push('');
@@ -242,15 +250,14 @@ async function copySummary() {
 /* ============================================================
    Trợ lý AI nâng cao (LLM qua /api/ask — Gemini miễn phí)
    - Server gọi model từ biến môi trường GEMINI_API_KEY. Thiếu khóa -> 503, UI hiện note cấu hình.
-   - Kết quả quy tắc vẫn là xương sống; LLM chỉ thêm phân tích bằng ngôn ngữ tự nhiên dựa trên ngữ cảnh đã tính sẵn.
+   - Phân tích bằng ngôn ngữ tự nhiên dựa trên ngữ cảnh đã tính sẵn; bảng quy trình do /api/propose đề xuất.
    ============================================================ */
 
 function buildAIContext(result) {
   const type = D.typeById(result.typeId);
   const lines = [`Loại dự án: ${type.label}`, type.intro, ''];
   result.stages.forEach((st, i) => {
-    const label = st.status === APPLY.YES ? 'Áp dụng' : st.status === APPLY.UNKNOWN ? 'Chưa xác định' : 'Không áp dụng';
-    lines.push(`${i + 1}. ${st.node.name} [${label}] (${st.duration}): ${st.desc}`);
+    lines.push(`${i + 1}. ${st.node.name} [${statusLabel(st.status)}] (${st.duration}): ${st.desc}`);
   });
   lines.push('');
   lines.push(`Thống kê: áp dụng ${result.counts.apply}, chưa xác định ${result.counts.unknown}, không áp dụng ${result.counts.na} (tổng ${result.counts.total}).`);
@@ -318,27 +325,165 @@ async function requestAIAnalysis() {
   if (body) body.innerHTML = aiAnswerHTML();
 }
 
+/* ============================================================
+   Đề xuất bảng quy trình bằng LLM (/api/propose)
+   - Bảng hiển thị là kết quả Gemini trả về (status + mô tả + ghi chú cho từng giai đoạn).
+   - Engine quy tắc vẫn chạy để dựng ngữ cảnh và làm phương án dự phòng khi AI lỗi.
+   - Quy tắc ba mức được giữ: thiếu dữ liệu -> "unknown", chỉ "na" khi ngữ cảnh ghi rõ.
+   ============================================================ */
+
+function buildProposalContext(result) {
+  const type = D.typeById(result.typeId);
+  const profile = S.getSurvey();
+  const lines = [`Loại dự án: ${type.label}`, type.intro, ''];
+  const answered = D.PROFILE_FIELDS.filter((f) => profile[f.id] && profile[f.id] !== 'chua_xac_dinh');
+  lines.push('KHẢO SÁT NGƯỜI DÙNG:');
+  if (answered.length) {
+    answered.forEach((f) => {
+      const opts = f.options || D.YESNO_OPTIONS;
+      const label = (opts.find((o) => o.value === profile[f.id]) || {}).label || profile[f.id];
+      lines.push(`- ${f.label}: ${label}`);
+    });
+  } else {
+    lines.push('- (chưa trả lời câu nào)');
+  }
+  lines.push('');
+  lines.push('CẤU TRÚC QUY TRÌNH (id, tên giai đoạn, thời lượng tham khảo, trạng thái tham khảo từ engine quy tắc, các nhóm bước chính):');
+  result.stages.forEach((st, i) => {
+    lines.push(`${i + 1}. id=${st.node.id} | ${st.node.name} | ${st.duration} | tham khảo: ${statusLabel(st.status)}`);
+    st.node.children.forEach((g) => {
+      const gi = result.map.get(g.id);
+      lines.push(`   - ${g.name} [${statusLabel(gi ? gi.status : st.status)}]`);
+    });
+  });
+  lines.push('');
+  lines.push('Trả về JSON đúng định dạng đã yêu cầu, đủ 8 giai đoạn theo thứ tự id S01..S08.');
+  return lines.join('\n');
+}
+
+function normStatus(raw) {
+  const s = String(raw == null ? '' : raw).toLowerCase().trim();
+  if (!s) return null;
+  if (s.includes('khong') || s.includes('không') || /\bna\b/.test(s)) return APPLY.NO;
+  if (s.includes('unknown') || s.includes('chưa') || s.includes('chua')) return APPLY.UNKNOWN;
+  if (s.includes('apply') || s.includes('yes') || s.includes('áp dụng') || s.includes('ap dung')) return APPLY.YES;
+  return null;
+}
+
+function parseProposal(text, result) {
+  let t = String(text == null ? '' : text).trim();
+  t = t.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+  let obj = null;
+  try { obj = JSON.parse(t); } catch (e) {
+    const s = t.indexOf('{');
+    const end = t.lastIndexOf('}');
+    if (s >= 0 && end > s) {
+      try { obj = JSON.parse(t.slice(s, end + 1)); } catch (e2) { /* bỏ qua */ }
+    }
+  }
+  const arr = obj && Array.isArray(obj.stages) ? obj.stages : null;
+  if (!arr) return null;
+  const byId = new Map();
+  arr.forEach((it) => { if (it && typeof it.id === 'string') byId.set(it.id.toUpperCase(), it); });
+  let valid = 0;
+  const merged = result.stages.map((st) => {
+    const ai = byId.get(String(st.node.id).toUpperCase());
+    const ns = ai ? normStatus(ai.status) : null;
+    if (ns != null) valid++;
+    const desc = ai && typeof ai.desc === 'string' && ai.desc.trim() ? ai.desc.trim() : st.desc;
+    const note = ai && typeof ai.note === 'string' ? ai.note.trim() : '';
+    return Object.assign({}, st, {
+      status: ns != null ? ns : st.status,
+      desc,
+      note,
+      aiProposed: ns != null,
+    });
+  });
+  // Nếu AI trả thiếu/không khớp quá nửa số giai đoạn thì coi như hỏng, fallback toàn bộ
+  if (valid < Math.ceil(result.stages.length / 2)) return null;
+  return merged;
+}
+
+let propSeq = 0;
+async function requestProposal() {
+  const seq = ++propSeq;
+  const result = ui.result;
+  if (!result) return;
+  try {
+    const res = await fetch('/api/propose', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ context: buildProposalContext(result) }),
+    });
+    if (seq !== propSeq) return;
+    if (res.status === 503) { ui.proposal = { status: 'fallback', reason: 'nokey' }; render(); return; }
+    if (res.status === 429) { ui.proposal = { status: 'fallback', reason: 'rate' }; render(); return; }
+    if (!res.ok) {
+      let detail = '';
+      try { const d = await res.json(); detail = d && d.detail ? String(d.detail) : ''; } catch (e) { /* bỏ qua */ }
+      if (seq !== propSeq) return;
+      ui.proposal = { status: 'fallback', reason: 'error', detail };
+      render();
+      return;
+    }
+    const data = await res.json();
+    if (seq !== propSeq) return;
+    const merged = parseProposal(data && data.answer, result);
+    ui.proposal = merged ? { status: 'ok', stages: merged } : { status: 'fallback', reason: 'parse' };
+  } catch (e) {
+    if (seq !== propSeq) return;
+    ui.proposal = { status: 'fallback', reason: 'error' };
+  }
+  render();
+}
+
+function displayResult(result) {
+  if (ui.proposal && ui.proposal.status === 'ok') {
+    return Object.assign({}, result, { stages: ui.proposal.stages });
+  }
+  return result;
+}
+
+function tableSourceHTML() {
+  const p = ui.proposal;
+  if (!p) return '';
+  if (p.status === 'loading') {
+    return `<div class="table-source src-loading">${ICONS.robot}<span>Trợ lý AI đang phân tích và đề xuất quy trình...</span></div>`;
+  }
+  if (p.status === 'ok') {
+    return `<div class="table-source src-ai">${ICONS.robot}<span>Bảng quy trình do trợ lý AI (Gemini) đề xuất dựa trên dữ liệu Hacom và khảo sát của bạn.</span></div>`;
+  }
+  let reason;
+  if (p.reason === 'nokey') reason = 'máy chủ thiếu khóa GEMINI_API_KEY';
+  else if (p.reason === 'rate') reason = 'gói miễn phí đang quá tải (429)';
+  else if (p.reason === 'parse') reason = 'kết quả AI trả về không đúng định dạng';
+  else reason = 'lỗi kết nối' + (p.detail ? ` — ${esc(p.detail)}` : '');
+  return `<div class="table-source src-rule">${ICONS.info}<span>Trợ lý AI chưa khả dụng (${reason}) — hiển thị bảng theo engine quy tắc.</span></div>`;
+}
+
 function renderAssistant() {
   const result = ui.result;
   const type = result ? D.typeById(result.typeId) : null;
   const hasResult = !!result;
+  const disp = hasResult ? displayResult(result) : null;
+  const aiLoadingFirst = hasResult && ui.proposal && ui.proposal.status === 'loading' && ui.proposal.first;
 
   const statCards = hasResult ? `
     <div class="stat-grid">
       <div class="stat-card st-apply">
-        <div class="stat-text"><span class="stat-label">Áp dụng</span><span class="stat-num">${result.counts.apply}</span></div>
+        <div class="stat-text"><span class="stat-label">Áp dụng</span><span class="stat-num">${disp.counts.apply}</span></div>
         <div class="stat-ic">${ICONS.checkSquare}</div>
       </div>
       <div class="stat-card st-unknown">
-        <div class="stat-text"><span class="stat-label">Chưa xác định</span><span class="stat-num">${result.counts.unknown}</span></div>
+        <div class="stat-text"><span class="stat-label">Chưa xác định</span><span class="stat-num">${disp.counts.unknown}</span></div>
         <div class="stat-ic">${ICONS.helpCircle}</div>
       </div>
       <div class="stat-card st-na">
-        <div class="stat-text"><span class="stat-label">Không áp dụng</span><span class="stat-num">${result.counts.na}</span></div>
+        <div class="stat-text"><span class="stat-label">Không áp dụng</span><span class="stat-num">${disp.counts.na}</span></div>
         <div class="stat-ic">${ICONS.xCircle}</div>
       </div>
       <div class="stat-card st-total">
-        <div class="stat-text"><span class="stat-label">Tổng số mục</span><span class="stat-num">${result.counts.total}</span></div>
+        <div class="stat-text"><span class="stat-label">Tổng số mục</span><span class="stat-num">${disp.counts.total}</span></div>
         <div class="stat-ic">${ICONS.list}</div>
       </div>
     </div>
@@ -351,18 +496,32 @@ function renderAssistant() {
         ${typeChip(type, true)}
       </div>
       <p class="result-intro">${esc(ui.beginner && type.beginnerIntro ? type.beginnerIntro : type.intro)}</p>
-      <div class="result-source">Nguồn: Cấu trúc quy trình đầu tư Hacom</div>
+      <div class="result-source">Nguồn: Cấu trúc quy trình đầu tư Hacom${ui.proposal && ui.proposal.status === 'ok' ? ' + phân tích trợ lý AI (Gemini)' : ''}</div>
       ${statCards}
     </div>
   ` : '';
 
-  const tableCard = hasResult ? renderTable(result) : `
-    <div class="empty">
-      ${ICONS.lightbulb}
-      <div class="empty-title">Hãy đặt câu hỏi hoặc chọn một loại dự án bên trên.</div>
-      <div>AI sẽ phân tích và đưa ra quy trình phù hợp nhất.</div>
-    </div>
-  `;
+  let tableCard;
+  if (!hasResult) {
+    tableCard = `
+      <div class="empty">
+        ${ICONS.lightbulb}
+        <div class="empty-title">Hãy đặt câu hỏi hoặc chọn một loại dự án bên trên.</div>
+        <div>AI sẽ phân tích và đề xuất quy trình phù hợp nhất.</div>
+      </div>
+    `;
+  } else if (aiLoadingFirst) {
+    tableCard = `
+      <div class="card table-card">
+        <div class="table-loading">
+          <div class="ai-loading"><span class="ai-dot"></span><span class="ai-dot"></span><span class="ai-dot"></span> Trợ lý AI đang phân tích và đề xuất quy trình đầu tư...</div>
+          <div class="ai-note" style="margin-top:10px">Bảng sẽ hiện ngay khi Gemini phản hồi; nếu AI lỗi, bảng theo engine quy tắc sẽ thay thế.</div>
+        </div>
+      </div>
+    `;
+  } else {
+    tableCard = renderTable(disp);
+  }
 
   const aiCard = hasResult ? `
     <div class="card ai-answer">
@@ -412,7 +571,7 @@ function renderAssistant() {
         ${tableCard}
       </div>
       <aside class="content-side">
-        ${hasResult ? renderSideSummary(result) : `
+        ${hasResult ? renderSideSummary(disp) : `
           <div class="note-card note-blue">
             <div class="note-title">${ICONS.info} Lưu ý</div>
             <div>Trạng thái dựa trên thông tin bạn cung cấp. Thiếu thông tin sẽ hiển thị "Chưa xác định". Bạn có thể trả lời khảo sát để làm rõ.</div>
@@ -434,6 +593,7 @@ function renderTable(result) {
     const idx = D.STAGES.findIndex((s) => s.id === st.node.id);
     const tone = stageToneClass(idx);
     const beginnerInline = ui.beginner && st.beginner ? `<div class="beginner-inline">${esc(st.beginner)}</div>` : '';
+    const aiNote = st.note ? `<div class="stage-ai-note">${ICONS.lightbulb} ${esc(st.note)}</div>` : '';
     return `
       <tr class="stage-row">
         <td>
@@ -445,7 +605,7 @@ function renderTable(result) {
             </div>
           </div>
         </td>
-        <td class="stage-desc-cell">${esc(st.desc)}</td>
+        <td class="stage-desc-cell">${esc(st.desc)}${aiNote}</td>
         <td>${pill(st.status, false)}</td>
         <td><button class="detail-link" data-action="open-detail" data-stage="${st.node.id}">Xem chi tiết &rsaquo;</button></td>
       </tr>
@@ -459,6 +619,7 @@ function renderTable(result) {
 
   return `
     <div class="card table-card">
+      ${tableSourceHTML()}
       <div class="toolbar">
         <div class="filter-chips">
           <button class="filter-chip ${ui.filter === 'all' ? 'active' : ''}" data-action="filter" data-value="all">Tất cả (${countAll})</button>

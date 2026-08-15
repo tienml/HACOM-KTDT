@@ -41,6 +41,21 @@ SYSTEM_PROMPT = (
     '(4) kết bằng một câu gợi ý xem bảng chi tiết bên dưới.'
 )
 
+# Đề xuất bảng quy trình: trả về JSON thuần để frontend dựng bảng. Trạng thái tuân theo quy tắc ba mức.
+PROPOSE_PROMPT = (
+    'Bạn là trợ lý AI của Hacom AI Invest, am hiểu quy trình đầu tư dự án tại Việt Nam. '
+    'Nhiệm vụ: dựa trên ngữ cảnh cho sẵn (loại dự án, câu trả lời khảo sát, cấu trúc các giai đoạn/bước '
+    'và trạng thái tham khảo), hãy đề xuất bảng quy trình đầu tư ở cấp GIAI ĐOẠN. '
+    'Trả về CHỈ MỘT object JSON hợp lệ, không kèm markdown, không code fence, không lời giải thích: '
+    '{"stages":[{"id":"S01","status":"apply","desc":"...","note":"..."}, ...]} đủ 8 phần tử theo đúng thứ tự id S01..S08 có trong ngữ cảnh. '
+    'Quy tắc bắt buộc: '
+    '(1) status chỉ nhận đúng một trong ba giá trị "apply" | "unknown" | "na"; khi dữ liệu/khảo sát chưa đủ căn cứ PHẢI để "unknown", '
+    'chỉ dùng "na" khi ngữ cảnh ghi rõ giai đoạn đó không áp dụng cho loại dự án này; '
+    '(2) desc là mô tả ngắn 1-2 câu bằng tiếng Việt, phản ánh đúng nội dung các nhóm bước đã cho, không bịa thủ tục ngoài ngữ cảnh; '
+    '(3) note là một câu tư vấn ngắn gọn cho nhà đầu tư về lưu ý/trọng tâm của giai đoạn đó (có thể để chuỗi rỗng nếu không cần); '
+    '(4) tôn trọng trạng thái tham khảo và câu trả lời khảo sát trong ngữ cảnh; nếu điều chỉnh khác thì phải nêu lý do ngắn trong note.'
+)
+
 # Tránh phụ thuộc Flask ở môi trường tối giản — dùng http.server chuẩn.
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 
@@ -59,7 +74,8 @@ class Handler(SimpleHTTPRequestHandler):
         return result
 
     def do_POST(self):
-        if self.path.split('?')[0] != '/api/ask':
+        path = self.path.split('?')[0]
+        if path not in ('/api/ask', '/api/propose'):
             self._json(404, {'error': 'not-found'})
             return
         try:
@@ -71,10 +87,15 @@ class Handler(SimpleHTTPRequestHandler):
         if not GEMINI_API_KEY:
             self._json(503, {'error': 'missing-key'})
             return
-        prompt = f"Câu hỏi: {body.get('question', '')}\n\nNGỮ CẢNH:\n{body.get('context', '')}"
+        if path == '/api/ask':
+            system = SYSTEM_PROMPT
+            user_text = f"Câu hỏi: {body.get('question', '')}\n\nNGỮ CẢNH:\n{body.get('context', '')}"
+        else:
+            system = PROPOSE_PROMPT
+            user_text = body.get('context', '')
         payload = json.dumps({
-            'system_instruction': {'parts': [{'text': SYSTEM_PROMPT}]},
-            'contents': [{'role': 'user', 'parts': [{'text': prompt}]}],
+            'system_instruction': {'parts': [{'text': system}]},
+            'contents': [{'role': 'user', 'parts': [{'text': user_text}]}],
         }).encode('utf-8')
         req = Request(
             f'https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent',
