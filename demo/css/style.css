@@ -837,6 +837,49 @@ a { color: var(--primary); }
 }
 .stage-ai-note svg { width: 13px; height: 13px; flex: none; margin-top: 1px; color: var(--primary); opacity: .8; }
 
+/* ============================================================
+   Gợi ý danh mục đầu tư — bảng so sánh + gợi ý AI
+   ============================================================ */
+.pf-table thead th:nth-child(1) { width: 76px; text-align: center; }
+.pf-table thead th:nth-child(3),
+.pf-table thead th:nth-child(4),
+.pf-table thead th:nth-child(5) { width: 92px; text-align: center; }
+.pf-table thead th:nth-child(6) { width: 168px; }
+.pf-rank-cell { text-align: center; }
+.pf-rank {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: 50%;
+  font-weight: 700; font-size: 14px; font-variant-numeric: tabular-nums;
+}
+.pf-rank-1 { background: var(--primary); color: #fff; box-shadow: 0 2px 8px rgba(90, 69, 230, .3); }
+.pf-rank-2 { background: var(--primary-100); color: var(--primary-strong); }
+.pf-rank-3 { background: var(--ok-100); color: var(--ok-strong); }
+.pf-rank-x { background: var(--na-100); color: var(--na-strong); }
+.pf-type { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.pf-intro { font-size: 12.5px; line-height: 1.5; color: var(--muted); }
+.pf-reason { margin-top: 6px; font-size: 12.5px; line-height: 1.5; color: var(--ink-2); }
+.pf-num { text-align: center; font-weight: 600; font-variant-numeric: tabular-nums; }
+.pf-num-ok { color: var(--ok-strong); }
+.pf-num-warn { color: var(--warn-strong); }
+.pf-num-na { color: var(--na-strong); }
+.pf-dots { display: flex; flex-wrap: wrap; gap: 5px; justify-content: flex-start; }
+.pdot { width: 14px; height: 14px; border-radius: 4px; cursor: help; }
+.pdot-ok { background: var(--ok); }
+.pdot-warn { background: var(--warn); }
+.pdot-na { background: var(--na-200); }
+.pf-legend { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); padding: 4px 2px; }
+.pf-legend .pdot { width: 11px; height: 11px; cursor: default; margin-left: 6px; }
+.pf-legend .pdot:first-child { margin-left: 0; }
+.pf-ai-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.pf-ai-list li { display: flex; align-items: flex-start; gap: 10px; font-size: 13px; line-height: 1.55; }
+.pf-ai-rank {
+  flex: none; width: 22px; height: 22px; border-radius: 50%;
+  background: var(--primary-100); color: var(--primary-strong);
+  display: inline-flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: 12px; font-variant-numeric: tabular-nums; margin-top: 1px;
+}
+.pf-ai-reason { color: var(--ink-2); }
+
 /* ---------------- In ấn ---------------- */
 
 @media print {

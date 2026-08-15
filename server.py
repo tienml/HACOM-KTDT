@@ -56,6 +56,20 @@ PROPOSE_PROMPT = (
     '(4) tôn trọng trạng thái tham khảo và câu trả lời khảo sát trong ngữ cảnh; nếu điều chỉnh khác thì phải nêu lý do ngắn trong note.'
 )
 
+# Gợi ý danh mục: so sánh các loại hình dự án, trả về JSON thuần để frontend dựng bảng + gợi ý AI.
+PORTFOLIO_PROMPT = (
+    'Bạn là cố vấn đầu tư bất động sản của Hacom AI Invest, am hiểu quy trình đầu tư dự án tại Việt Nam. '
+    'Nhiệm vụ: dựa trên dữ liệu QUY TRÌNH THỰC cho sẵn của từng loại hình (số bước áp dụng/chưa xác định/không áp dụng, '
+    'thời lượng tham khảo mỗi giai đoạn) và câu trả lời khảo sát của nhà đầu tư, hãy đề xuất thứ tự ưu tiên / phân bổ danh mục đầu tư. '
+    'Trả về CHỈ MỘT object JSON hợp lệ, không kèm markdown, không code fence, không lời giải thích: '
+    '{"ranks":[{"id":"noxa","rank":1,"reason":"..."}, ...]} đủ 5 phần tử, mỗi id đúng một lần, rank là số nguyên 1..5 không trùng. '
+    'Quy tắc bắt buộc: '
+    '(1) sắp xếp theo mức độ phù hợp với nhà đầu tư dựa trên dữ liệu thực đã cho và khảo sát — KHÔNG bịa con số hay thủ tục ngoài ngữ cảnh; '
+    '(2) reason là một câu tiếng Việt ngắn gọn giải thích vì sao xếp hạng đó, phải bám vào dữ liệu cụ thể (ví dụ ít bước chưa xác định hơn, thời gian ngắn hơn, ít ràng buộc PCCC/đất đai hơn...); '
+    '(3) với loại hình thiếu dữ liệu nhiều (nhiều "chưa xác định") phải nói rõ điều đó trong reason, không được khẳng định chắc chắn; '
+    '(4) tôn trọng khảo sát: nếu nhà đầu tư thiên về an toàn/pháp lý rõ ràng thì ưu tiên loại ít rủi ro thủ tục.'
+)
+
 # Tránh phụ thuộc Flask ở môi trường tối giản — dùng http.server chuẩn.
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 
@@ -75,7 +89,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         path = self.path.split('?')[0]
-        if path not in ('/api/ask', '/api/propose'):
+        if path not in ('/api/ask', '/api/propose', '/api/portfolio'):
             self._json(404, {'error': 'not-found'})
             return
         try:
@@ -90,6 +104,9 @@ class Handler(SimpleHTTPRequestHandler):
         if path == '/api/ask':
             system = SYSTEM_PROMPT
             user_text = f"Câu hỏi: {body.get('question', '')}\n\nNGỮ CẢNH:\n{body.get('context', '')}"
+        elif path == '/api/portfolio':
+            system = PORTFOLIO_PROMPT
+            user_text = body.get('context', '')
         else:
             system = PROPOSE_PROMPT
             user_text = body.get('context', '')

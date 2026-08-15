@@ -93,8 +93,6 @@ const NAV_ITEMS = [
   { id: 'analysis', label: 'Phân tích AI', icon: ICONS.target },
   { id: 'suggest-portfolio', label: 'Gợi ý danh mục', icon: ICONS.hierarchy },
   { id: 'process', label: 'Quy trình đầu tư', icon: ICONS.flow },
-  { id: 'my-portfolio', label: 'Danh mục của tôi', icon: ICONS.briefcase },
-  { id: 'monitor', label: 'Theo dõi & Đánh giá', icon: ICONS.trendingUp },
   { id: 'history', label: 'Lịch sử tư vấn', icon: ICONS.clock },
 ];
 
@@ -105,6 +103,7 @@ const VIEW_REAL = {
   'survey': 'survey',
   'process': 'process',
   'history': 'history',
+  'suggest-portfolio': 'portfolio',
 };
 
 /* ============================================================
@@ -126,6 +125,8 @@ const ui = {
   treeOpen: new Set(['S01']),
   treeSearch: '',
   modalSummary: false,
+  // Gợi ý danh mục đầu tư (so sánh các loại hình + AI xếp hạng)
+  portfolio: null,        // { status: 'idle'|'loading'|'ok'|'fallback', ranks: [{id,rank,reason}], reason? }
 };
 
 const elMain = document.getElementById('main');
@@ -475,6 +476,267 @@ async function requestProposal() {
   // Lưu kết quả đề xuất vào lịch sử (stages dạng thuần để localStorage gọn)
   saveSnapshotPart({ proposal: next.status === 'ok' ? { status: 'ok', stages: plainStages(next.stages) } : next });
   render();
+}
+
+/* ============================================================
+   Gợi ý danh mục đầu tư (/api/portfolio)
+   - So sánh các loại hình bằng số liệu THỰC từ engine quy tắc Hacom
+     (số bước áp dụng/chưa xác định/không áp dụng + trạng thái từng giai đoạn).
+   - Gemini xếp hạng ưu tiên dựa trên số liệu đó + khảo sát nhà đầu tư.
+   - Khi AI lỗi/định dạng sai -> fallback theo engine quy tắc: ít bước "chưa xác
+     định" hơn = thủ tục rõ ràng hơn -> ưu tiên. Mọi con số đều là dữ liệu thật,
+     không bịa.
+   ============================================================ */
+
+function portfolioComparisons() {
+  const profile = S.getSurvey();
+  return D.PROJECT_TYPES.filter((t) => t.id !== 'chung').map((type) => ({ type, result: D.suggest(type, profile) }));
+}
+
+function buildPortfolioContext(comparisons) {
+  const profile = S.getSurvey();
+  const lines = ['DỮ LIỆU QUY TRÌNH THỰC CỦA TỪNG LOẠI HÌNH (tính từ engine quy tắc Hacom, không phải suy đoán):'];
+  comparisons.forEach(({ type, result }) => {
+    lines.push('');
+    lines.push(`LOẠI HÌNH: ${type.label} (id=${type.id}) — ${type.intro}`);
+    lines.push(`Tổng số bước: áp dụng ${result.counts.apply}, chưa xác định ${result.counts.unknown}, không áp dụng ${result.counts.na} (tổng ${result.counts.total}).`);
+    result.stages.forEach((st, i) => {
+      lines.push(`${i + 1}. ${st.node.name} | ${st.duration} | ${statusLabel(st.status)}`);
+    });
+  });
+  lines.push('');
+  const answered = D.PROFILE_FIELDS.filter((f) => profile[f.id] && profile[f.id] !== 'chua_xac_dinh');
+  lines.push('KHẢO SÁT NHÀ ĐẦU TƯ:');
+  if (answered.length) {
+    answered.forEach((f) => {
+      const opts = f.options || D.YESNO_OPTIONS;
+      const label = (opts.find((o) => o.value === profile[f.id]) || {}).label || profile[f.id];
+      lines.push(`- ${f.label}: ${label}`);
+    });
+  } else {
+    lines.push('- (chưa trả lời câu nào — hãy điền khảo sát để gợi ý sát hơn)');
+  }
+  lines.push('');
+  lines.push('Trả về JSON đúng định dạng đã yêu cầu, đủ 5 loại hình theo id.');
+  return lines.join('\n');
+}
+
+function fallbackRanks(comparisons) {
+  // Quy tắc: ít bước "chưa xác định" hơn = thủ tục rõ ràng hơn -> ưu tiên;
+  // bằng nhau thì nhiều bước áp dụng hơn trước. Lý do sinh ra từ chính số liệu.
+  const sorted = [...comparisons].sort((a, b) =>
+    (a.result.counts.unknown - b.result.counts.unknown) || (b.result.counts.apply - a.result.counts.apply));
+  return sorted.map((c, i) => ({
+    id: c.type.id,
+    rank: i + 1,
+    reason: `Engine quy tắc: ${c.result.counts.unknown} bước chưa xác định, ${c.result.counts.apply} bước áp dụng — xếp theo mức độ rõ ràng của thủ tục.`,
+  }));
+}
+
+function parsePortfolio(text, comparisons) {
+  let t = String(text == null ? '' : text).trim();
+  t = t.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+  let obj = null;
+  try { obj = JSON.parse(t); } catch (e) {
+    const s = t.indexOf('{');
+    const end = t.lastIndexOf('}');
+    if (s >= 0 && end > s) {
+      try { obj = JSON.parse(t.slice(s, end + 1)); } catch (e2) { /* bỏ qua */ }
+    }
+  }
+  const arr = obj && Array.isArray(obj.ranks) ? obj.ranks : null;
+  if (!arr) return null;
+  const ids = comparisons.map((c) => c.type.id);
+  const seen = new Set();
+  const ranks = [];
+  arr.forEach((it) => {
+    if (!it || typeof it.id !== 'string') return;
+    const id = it.id.toLowerCase();
+    const rank = Number(it.rank);
+    if (!ids.includes(id) || seen.has(id)) return;
+    if (!Number.isInteger(rank) || rank < 1 || rank > ids.length) return;
+    seen.add(id);
+    ranks.push({ id, rank, reason: typeof it.reason === 'string' ? it.reason.trim() : '' });
+  });
+  if (ranks.length !== ids.length) return null;
+  const rankSet = new Set(ranks.map((r) => r.rank));
+  if (rankSet.size !== ids.length) return null;
+  return ranks.sort((a, b) => a.rank - b.rank);
+}
+
+let portSeq = 0;
+async function requestPortfolio() {
+  const seq = ++portSeq;
+  const comparisons = portfolioComparisons();
+  ui.portfolio = { status: 'loading', comparisons };
+  render();
+  let next;
+  try {
+    const res = await fetch('/api/portfolio', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ context: buildPortfolioContext(comparisons) }),
+    });
+    if (seq !== portSeq) return;
+    if (res.status === 503) next = { status: 'fallback', reason: 'nokey' };
+    else if (res.status === 429) next = { status: 'fallback', reason: 'rate' };
+    else if (!res.ok) {
+      let detail = '';
+      try { const d = await res.json(); detail = d && d.detail ? String(d.detail) : ''; } catch (e) { /* bỏ qua */ }
+      if (seq !== portSeq) return;
+      next = { status: 'fallback', reason: 'error', detail };
+    } else {
+      const data = await res.json();
+      if (seq !== portSeq) return;
+      const ranks = parsePortfolio(data && data.answer, comparisons);
+      next = ranks ? { status: 'ok', ranks } : { status: 'fallback', reason: 'parse' };
+    }
+  } catch (e) {
+    if (seq !== portSeq) return;
+    next = { status: 'fallback', reason: 'error' };
+  }
+  // AI lỗi/định dạng sai -> vẫn có kết quả nhờ xếp hạng theo engine quy tắc
+  if (next.status === 'fallback') next.ranks = fallbackRanks(comparisons);
+  ui.portfolio = Object.assign({ comparisons }, next);
+  render();
+}
+
+function portfolioSourceHTML(p) {
+  if (!p) return '';
+  if (p.status === 'loading') {
+    return `<div class="table-source src-loading">${ICONS.robot}<span>Trợ lý AI đang so sánh các loại hình và xếp hạng danh mục...</span></div>`;
+  }
+  if (p.status === 'ok') {
+    return `<div class="table-source src-ai">${ICONS.robot}<span>Thứ tự ưu tiên do trợ lý AI (Gemini) đề xuất dựa trên dữ liệu quy trình thực và khảo sát của bạn.</span></div>`;
+  }
+  let reason;
+  if (p.reason === 'nokey') reason = 'máy chủ thiếu khóa GEMINI_API_KEY';
+  else if (p.reason === 'rate') reason = 'gói miễn phí đang quá tải (429)';
+  else if (p.reason === 'parse') reason = 'kết quả AI trả về không đúng định dạng';
+  else reason = 'lỗi kết nối' + (p.detail ? ` — ${esc(p.detail)}` : '');
+  return `<div class="table-source src-rule">${ICONS.info}<span>Trợ lý AI chưa khả dụng (${reason}) — thứ tự bên dưới xếp theo engine quy tắc.</span></div>`;
+}
+
+function renderPortfolio() {
+  let p = ui.portfolio;
+  if (!p) {
+    ui.portfolio = { status: 'loading' };
+    requestPortfolio();
+    p = ui.portfolio;
+  }
+  const comparisons = p.comparisons || portfolioComparisons();
+  const ranks = p.ranks || [];
+  const rankById = new Map(ranks.map((r) => [r.id, r]));
+
+  // Sắp xếp bảng theo thứ tự AI đề xuất (nếu có), giữ nguyên thứ tự gốc khi chưa có
+  const ordered = ranks.length
+    ? [...comparisons].sort((a, b) => (rankById.get(a.type.id)?.rank ?? 99) - (rankById.get(b.type.id)?.rank ?? 99))
+    : comparisons;
+
+  const rows = ordered.map(({ type, result }) => {
+    const rk = rankById.get(type.id);
+    const rankCell = rk
+      ? `<span class="pf-rank pf-rank-${Math.min(rk.rank, 3)}">${rk.rank}</span>`
+      : '<span class="pf-rank pf-rank-x">—</span>';
+    const dots = result.stages.map((st) => {
+      const cls = st.status === APPLY.YES ? 'pdot-ok' : st.status === APPLY.UNKNOWN ? 'pdot-warn' : 'pdot-na';
+      return `<span class="pdot ${cls}" title="${esc(st.node.name)} — ${statusLabel(st.status)} (${st.duration})"></span>`;
+    }).join('');
+    const reason = rk?.reason ? `<div class="pf-reason">${esc(rk.reason)}</div>` : '';
+    return `
+      <tr class="pf-row">
+        <td class="pf-rank-cell">${rankCell}</td>
+        <td>
+          <div class="pf-type">${typeChip(type, true)}</div>
+          <div class="pf-intro">${esc(type.intro)}</div>
+          ${reason}
+        </td>
+        <td class="pf-num pf-num-ok">${result.counts.apply}</td>
+        <td class="pf-num pf-num-warn">${result.counts.unknown}</td>
+        <td class="pf-num pf-num-na">${result.counts.na}</td>
+        <td><div class="pf-dots">${dots}</div></td>
+      </tr>
+    `;
+  }).join('');
+
+  const aiList = ranks.length ? `
+    <ol class="pf-ai-list">
+      ${ranks.map((r) => {
+        const t = D.typeById(r.id);
+        return `<li><span class="pf-ai-rank">${r.rank}</span><span class="chip-type tone-${t.tone} small">${esc(t.label)}</span><span class="pf-ai-reason">${esc(r.reason)}</span></li>`;
+      }).join('')}
+    </ol>
+  ` : '';
+
+  const loadingCard = p.status === 'loading' ? `
+    <div class="card table-card">
+      <div class="table-loading">
+        <div class="ai-loading"><span class="ai-dot"></span><span class="ai-dot"></span><span class="ai-dot"></span> Trợ lý AI đang so sánh các loại hình dự án...</div>
+        <div class="ai-note" style="margin-top:10px">Bảng so sánh sẽ hiện ngay khi Gemini phản hồi; nếu AI lỗi, thứ tự theo engine quy tắc sẽ thay thế.</div>
+      </div>
+    </div>
+  ` : `
+    <div class="card table-card">
+      ${portfolioSourceHTML(p)}
+      <div class="table-wrap">
+        <table class="proc-table pf-table">
+          <thead>
+            <tr>
+              <th class="pf-th-rank">Ưu tiên</th>
+              <th>Loại hình dự án</th>
+              <th>Áp dụng</th>
+              <th>Chưa xác định</th>
+              <th>Không áp dụng</th>
+              <th>8 giai đoạn</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+      <div class="table-foot">
+        <span class="pf-legend">
+          <span class="pdot pdot-ok"></span> Áp dụng
+          <span class="pdot pdot-warn"></span> Chưa xác định
+          <span class="pdot pdot-na"></span> Không áp dụng
+        </span>
+      </div>
+    </div>
+  `;
+
+  const aiCard = p.status === 'loading' ? '' : `
+    <div class="card ai-answer">
+      <div class="ai-answer-head">${ICONS.robot} Thứ tự ưu tiên đề xuất</div>
+      <div class="ai-answer-body">${aiList}</div>
+      <div class="ai-foot">Trợ lý AI (Gemini) — nội dung mang tính tham khảo, đối chiếu bảng số liệu thực bên dưới.</div>
+    </div>
+  `;
+
+  return `
+    <div class="page-head page-head-row">
+      <div>
+        <h1>Gợi ý danh mục đầu tư</h1>
+        <p class="page-sub">So sánh các loại hình dự án bằng dữ liệu quy trình thực, rồi để AI gợi ý thứ tự ưu tiên cho bạn.</p>
+      </div>
+      <button class="btn btn-primary btn-sm" data-action="run-portfolio">${ICONS.robot} Phân tích lại</button>
+    </div>
+    <div class="content-grid">
+      <div class="content-main">
+        ${aiCard}
+        ${loadingCard}
+      </div>
+      <aside class="content-side">
+        <div class="note-card note-blue">
+          <div class="note-title">${ICONS.info} Dữ liệu thật</div>
+          <div>Các con số trong bảng được tính trực tiếp từ engine quy tắc Hacom cho từng loại hình — không phải suy đoán. Cột "8 giai đoạn" hiển thị trạng thái từng bước.</div>
+        </div>
+        <div class="note-card note-yellow">
+          <div class="note-title">${ICONS.lightbulb} Làm gợi ý sát hơn</div>
+          <div>Trả lời khảo sát nhanh rồi nhấn "Phân tích lại" để AI cân nhắc điều kiện cụ thể của bạn (hình thức đầu tư, giải phóng mặt bằng, PCCC...).</div>
+          <button class="btn btn-outline btn-sm" style="margin-top:10px" data-action="nav-survey">Đi tới Khảo sát</button>
+        </div>
+      </aside>
+    </div>
+  `;
 }
 
 function displayResult(result) {
@@ -1209,6 +1471,8 @@ function render() {
     elMain.innerHTML = renderProcess();
   } else if (ui.view === 'survey') {
     elMain.innerHTML = renderSurvey();
+  } else if (ui.view === 'portfolio') {
+    elMain.innerHTML = renderPortfolio();
   } else if (ui.view === 'history') {
     elMain.innerHTML = renderHistory();
   }
@@ -1367,6 +1631,17 @@ document.addEventListener('click', (e) => {
     const item = S.getHistory().find((h) => h.id === target.dataset.id);
     if (item && item.snapshot) reopenHistory(item);
     else ask(target.dataset.query || '', target.dataset.type); // dòng cũ chưa có snapshot thì phân tích lại
+    return;
+  }
+  if (action === 'run-portfolio') {
+    requestPortfolio();
+    return;
+  }
+  if (action === 'nav-survey') {
+    ui.activeNav = 'survey';
+    ui.view = 'survey';
+    ui.soon = null;
+    render();
     return;
   }
   if (action === 'toggle-tree-stage') {
