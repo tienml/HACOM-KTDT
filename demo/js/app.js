@@ -121,6 +121,7 @@ const ui = {
   search: '',
   beginner: S.getBeginner(),
   detailStageId: null,
+  historyId: null,       // id dòng lịch sử của lần tư vấn hiện tại (để lưu lại kết quả AI)
   whyOpen: new Set(),  // node.id đang mở why-box trong màn detail/process
   treeOpen: new Set(['S01']),
   treeSearch: '',
@@ -201,10 +202,44 @@ function ask(query, typeId) {
   ui.aiAnswer = { status: 'loading' };
   // Bảng quy trình giờ do LLM đề xuất: hiện trạng thái đang phân tích, fallback về quy tắc khi lỗi
   ui.proposal = { status: 'loading', first: true };
-  S.addHistory({ query: query || type.label, typeId: type.id, typeLabel: type.label, counts: result.counts });
+  ui.historyId = S.addHistory({ query: query || type.label, typeId: type.id, typeLabel: type.label, counts: result.counts, snapshot: makeSnapshot(result) });
   render();
   requestAIAnalysis();
   requestProposal();
+}
+
+/* Chuyển đổi giữa dạng lưu trữ thuần JSON và đối tượng runtime của kết quả tư vấn.
+   Snapshot giữ lại toàn bộ trạng thái đã phân tích (map trạng thái từng node + các giai đoạn
+   kèm mô tả/ghi chú AI) để nút "Xem lại" dựng lại đúng màn hình cũ mà không phải gọi lại Gemini. */
+function plainStages(stages) {
+  return stages.map((st) => ({
+    nodeId: st.node.id,
+    status: st.status,
+    desc: st.desc,
+    duration: st.duration,
+    beginner: st.beginner || '',
+    note: st.note || '',
+    aiProposed: !!st.aiProposed,
+  }));
+}
+
+function reviveStages(list) {
+  return (list || [])
+    .map((s) => Object.assign({}, s, { node: D.NODE_BY_ID.get(s.nodeId) }))
+    .filter((s) => s.node);
+}
+
+function makeSnapshot(result) {
+  const map = {};
+  result.map.forEach((v, k) => { map[k] = v; });
+  return { map, stages: plainStages(result.stages), counts: result.counts, aiAnswer: null, proposal: null };
+}
+
+function saveSnapshotPart(part) {
+  if (!ui.historyId) return;
+  const item = S.getHistory().find((h) => h.id === ui.historyId);
+  if (!item) return;
+  S.updateHistory(ui.historyId, { snapshot: Object.assign({}, item.snapshot, part) });
 }
 
 function statusLabel(status) {
@@ -320,6 +355,8 @@ async function requestAIAnalysis() {
     if (seq !== aiSeq) return;
     ui.aiAnswer = { status: 'error' };
   }
+  // Lưu lại kết quả phân tích để "Xem lại" không phải gọi lại AI
+  saveSnapshotPart({ aiAnswer: ui.aiAnswer });
   // Patch trực tiếp vào card để không làm mất focus khi người dùng đang thao tác ở màn khác
   const body = document.querySelector('.ai-answer-body');
   if (body) body.innerHTML = aiAnswerHTML();
@@ -409,6 +446,7 @@ async function requestProposal() {
   const seq = ++propSeq;
   const result = ui.result;
   if (!result) return;
+  let next;
   try {
     const res = await fetch('/api/propose', {
       method: 'POST',
@@ -416,24 +454,26 @@ async function requestProposal() {
       body: JSON.stringify({ context: buildProposalContext(result) }),
     });
     if (seq !== propSeq) return;
-    if (res.status === 503) { ui.proposal = { status: 'fallback', reason: 'nokey' }; render(); return; }
-    if (res.status === 429) { ui.proposal = { status: 'fallback', reason: 'rate' }; render(); return; }
-    if (!res.ok) {
+    if (res.status === 503) next = { status: 'fallback', reason: 'nokey' };
+    else if (res.status === 429) next = { status: 'fallback', reason: 'rate' };
+    else if (!res.ok) {
       let detail = '';
       try { const d = await res.json(); detail = d && d.detail ? String(d.detail) : ''; } catch (e) { /* bỏ qua */ }
       if (seq !== propSeq) return;
-      ui.proposal = { status: 'fallback', reason: 'error', detail };
-      render();
-      return;
+      next = { status: 'fallback', reason: 'error', detail };
+    } else {
+      const data = await res.json();
+      if (seq !== propSeq) return;
+      const merged = parseProposal(data && data.answer, result);
+      next = merged ? { status: 'ok', stages: merged } : { status: 'fallback', reason: 'parse' };
     }
-    const data = await res.json();
-    if (seq !== propSeq) return;
-    const merged = parseProposal(data && data.answer, result);
-    ui.proposal = merged ? { status: 'ok', stages: merged } : { status: 'fallback', reason: 'parse' };
   } catch (e) {
     if (seq !== propSeq) return;
-    ui.proposal = { status: 'fallback', reason: 'error' };
+    next = { status: 'fallback', reason: 'error' };
   }
+  ui.proposal = next;
+  // Lưu kết quả đề xuất vào lịch sử (stages dạng thuần để localStorage gọn)
+  saveSnapshotPart({ proposal: next.status === 'ok' ? { status: 'ok', stages: plainStages(next.stages) } : next });
   render();
 }
 
@@ -1107,7 +1147,7 @@ function renderHistory() {
           <span class="chip-type tone-${D.typeById(item.typeId).tone} small">${esc(item.typeLabel || 'Chung')}</span>
           <span>${esc(time)}</span>
           ${counts ? `<span>${esc(counts)}</span>` : ''}
-          <button class="btn btn-outline btn-sm" data-action="reopen-history" data-type="${item.typeId}" data-query="${esc(item.query || '')}">Xem lại</button>
+          <button class="btn btn-outline btn-sm" data-action="reopen-history" data-id="${item.id}" data-type="${item.typeId}" data-query="${esc(item.query || '')}">Xem lại</button>
         </div>
       </div>
     `;
@@ -1123,6 +1163,32 @@ function renderHistory() {
     </div>
     <div class="history-list">${body}</div>
   `;
+}
+
+/** Dựng lại màn AI từ snapshot đã lưu — tức thì, không gọi lại Gemini, không ghi thêm lịch sử. */
+function reopenHistory(item) {
+  const snap = item.snapshot || {};
+  ui.result = {
+    typeId: item.typeId,
+    map: new Map(Object.entries(snap.map || {})),
+    stages: reviveStages(snap.stages),
+    counts: snap.counts || { apply: 0, unknown: 0, na: 0, total: 0 },
+  };
+  ui.query = item.query || '';
+  ui.filter = 'all';
+  ui.search = '';
+  ui.detailStageId = null;
+  ui.modalSummary = false;
+  ui.historyId = null; // đang xem lại, không phải lần tư vấn mới -> không ghi đè snapshot cũ
+  ui.aiAnswer = snap.aiAnswer || { status: 'error' };
+  const p = snap.proposal;
+  ui.proposal = p
+    ? (p.status === 'ok' ? { status: 'ok', stages: reviveStages(p.stages) } : p)
+    : { status: 'fallback', reason: 'error' };
+  ui.activeNav = 'ai-assistant';
+  ui.view = VIEW_REAL['ai-assistant'];
+  ui.soon = null;
+  render();
 }
 
 /* ============================================================
@@ -1320,7 +1386,9 @@ document.addEventListener('click', (e) => {
     return;
   }
   if (action === 'reopen-history') {
-    ask(target.dataset.query || '', target.dataset.type);
+    const item = S.getHistory().find((h) => h.id === target.dataset.id);
+    if (item && item.snapshot) reopenHistory(item);
+    else ask(target.dataset.query || '', target.dataset.type); // dòng cũ chưa có snapshot thì phân tích lại
     return;
   }
   if (action === 'toggle-tree-stage') {

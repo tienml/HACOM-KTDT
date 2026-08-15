@@ -73,8 +73,18 @@ window.HacomStore = (() => {
       typeId: entry.typeId,
       typeLabel: entry.typeLabel,
       counts: entry.counts || null,
+      snapshot: entry.snapshot || null, // kết quả đã phân tích để "Xem lại" không phải gọi lại AI
     };
     state.history = [item, ...state.history].slice(0, MAX_HISTORY);
+    save();
+    return item.id;
+  }
+
+  /** Gộp thêm dữ liệu (ví dụ kết quả AI trả về sau) vào một dòng lịch sử có sẵn. */
+  function updateHistory(id, patch) {
+    const item = state.history.find((h) => h.id === id);
+    if (!item) return;
+    Object.assign(item, patch);
     save();
   }
 
@@ -108,6 +118,7 @@ window.HacomStore = (() => {
     resetSurvey,
     getHistory,
     addHistory,
+    updateHistory,
     clearHistory,
     getBeginner,
     setBeginner,
