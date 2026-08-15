@@ -763,16 +763,18 @@ a { color: var(--primary); }
 .tour-fab {
   position: fixed; right: 22px; bottom: 22px; z-index: 60;
   display: inline-flex; align-items: center; gap: 8px;
-  padding: 10px 16px; border: 0; border-radius: 999px;
-  background: var(--primary); color: #fff;
-  font-family: inherit; font-weight: 600; font-size: 13px;
-  box-shadow: 0 8px 24px rgba(90, 69, 230, .35);
-  cursor: pointer;
+  padding: 9px 18px; border: 1px solid rgba(90, 69, 230, .4); border-radius: 999px;
+  background: #fff; color: var(--primary);
+  font-family: inherit; font-weight: 700; font-size: 13px;
+  box-shadow: 0 8px 22px rgba(90, 69, 230, .18);
+  cursor: pointer; transition: background .15s ease, border-color .15s ease;
 }
-.tour-fab svg { width: 16px; height: 16px; }
-.tour-fab:hover { background: #4a37c9; }
+.tour-fab svg { width: 17px; height: 17px; }
+.tour-fab:hover { background: rgba(90, 69, 230, .07); border-color: var(--primary); }
 
 #tour-root { position: fixed; inset: 0; z-index: 100; pointer-events: none; }
+/* Lớp nền bắt click toàn màn hình — nhấp ra ngoài để sang bước tiếp theo */
+.tour-backdrop { position: fixed; inset: 0; pointer-events: auto; cursor: pointer; }
 .tour-spot {
   position: fixed; display: none; pointer-events: none;
   border-radius: 14px; border: 2px solid var(--primary);
@@ -804,6 +806,7 @@ a { color: var(--primary); }
   font-size: 18px; line-height: 1; color: var(--muted); cursor: pointer;
 }
 .tour-x:hover { color: var(--ink); }
+.tour-hint { font-size: 11.5px; color: var(--faint); margin-top: 10px; text-align: center; }
 
 /* ---------------- In ấn ---------------- */
 

@@ -1200,6 +1200,7 @@ function tourRenderCard() {
   const step = TOUR_STEPS[tourIdx];
   const n = TOUR_STEPS.length;
   root.innerHTML = `
+    <div class="tour-backdrop" data-action="tour-next"></div>
     <div class="tour-spot"></div>
     <div class="tour-card" data-action="noop">
       <button class="tour-x" data-action="tour-skip" title="Đóng hướng dẫn">&times;</button>
@@ -1214,6 +1215,7 @@ function tourRenderCard() {
           <button class="btn btn-primary btn-sm" data-action="tour-next">${tourIdx === n - 1 ? 'Hoàn thành' : 'Tiếp &rarr;'}</button>
         </div>
       </div>
+      <div class="tour-hint">Nhấp ra ngoài màn hình để sang bước tiếp theo</div>
     </div>
   `;
 }
