@@ -276,7 +276,8 @@ function aiAnswerHTML() {
     return `<div class="ai-note">Trợ lý AI nâng cao đang quá tải (gói miễn phí giới hạn lượt gọi). Thử lại sau ít phút — kết quả quy tắc bên dưới vẫn chính xác.</div>`;
   }
   if (a.status === 'error') {
-    return `<div class="ai-note">Trợ lý AI nâng cao tạm thời không khả dụng. Kết quả quy tắc bên dưới vẫn đầy đủ.</div>`;
+    const detail = a.detail ? ` — chi tiết: ${esc(a.detail)}` : '';
+    return `<div class="ai-note">Trợ lý AI nâng cao tạm thời không khả dụng${detail}. Kết quả quy tắc bên dưới vẫn đầy đủ.</div>`;
   }
   return `<div class="ai-text">${formatAIText(a.text)}</div>
     <div class="ai-foot">Trợ lý AI (Gemini) — nội dung mang tính tham khảo, đối chiếu bảng chi tiết bên dưới.</div>`;
@@ -297,7 +298,12 @@ async function requestAIAnalysis() {
     if (seq !== aiSeq) return;
     if (res.status === 503) ui.aiAnswer = { status: 'nokey' };
     else if (res.status === 429) ui.aiAnswer = { status: 'rate' };
-    else if (!res.ok) ui.aiAnswer = { status: 'error' };
+    else if (!res.ok) {
+      let detail = '';
+      try { const d = await res.json(); detail = d && d.detail ? String(d.detail) : ''; } catch (e) { /* bỏ qua */ }
+      if (seq !== aiSeq) return;
+      ui.aiAnswer = { status: 'error', detail };
+    }
     else {
       const data = await res.json();
       if (seq !== aiSeq) return;

@@ -8,7 +8,7 @@ biến môi trường, đặt trên Railway (Variables):
 
   PORT           - cổng lắng nghe (Railway tự cấp, mặc định 8080).
   GEMINI_API_KEY - khóa lấy miễn phí tại https://aistudio.google.com/apikey
-  GEMINI_MODEL   - tùy chọn, mặc định gemini-2.5-flash
+  GEMINI_MODEL   - tùy chọn, mặc định gemini-3.5-flash
 """
 
 import json
@@ -28,7 +28,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DEMO_DIR = os.path.join(BASE_DIR, 'demo')
 
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
-GEMINI_MODEL = os.environ.get('GEMINI_MODEL', 'gemini-2.5-flash')
+# Dòng model hiện hành (8/2026): gemini-3.x-flash. Dòng 2.5 cũ có thể bị Google từ chối -> lỗi 404.
+GEMINI_MODEL = os.environ.get('GEMINI_MODEL', 'gemini-3.5-flash')
 
 SYSTEM_PROMPT = (
     'Bạn là trợ lý AI của Hacom AI Invest, am hiểu quy trình đầu tư dự án tại Việt Nam. '
@@ -87,12 +88,24 @@ class Handler(SimpleHTTPRequestHandler):
             text = data['candidates'][0]['content']['parts'][0]['text']
             self._json(200, {'answer': text})
         except HTTPError as e:
-            detail = e.read().decode('utf-8', 'replace')[:300]
-            sys.stderr.write(f'[gemini] HTTP {e.code}: {detail}\n')
-            self._json(e.code if e.code == 429 else 502, {'error': 'upstream'})
+            raw = e.read().decode('utf-8', 'replace')[:400]
+            sys.stderr.write(f'[gemini] HTTP {e.code}: {raw}\n')
+            # Trả kèm lý do rút gọn để UI chẩn đoán nhanh (không lộ toàn bộ payload).
+            detail = self._short_reason(raw) or f'HTTP {e.code}'
+            self._json(e.code if e.code == 429 else 502, {'error': 'upstream', 'detail': detail})
         except Exception as e:
             sys.stderr.write(f'[gemini] lỗi: {e}\n')
-            self._json(502, {'error': 'upstream'})
+            self._json(502, {'error': 'upstream', 'detail': str(e)[:160]})
+
+    @staticmethod
+    def _short_reason(raw):
+        # Rút message ngắn từ JSON lỗi của Google, ví dụ "...is not found for API version..." hoặc "API key not valid".
+        try:
+            obj = json.loads(raw)
+            msg = obj.get('error', {}).get('message', '')
+            return msg[:160] if msg else ''
+        except Exception:
+            return raw[:160].replace('\n', ' ')
 
     def _json(self, code, obj):
         data = json.dumps(obj).encode('utf-8')
