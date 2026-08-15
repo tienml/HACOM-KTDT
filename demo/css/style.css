@@ -629,14 +629,19 @@ a { color: var(--primary); }
 
 .tree { display: flex; flex-direction: column; gap: 8px; }
 .tree-stage { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
-.tree-stage-head { display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: #fafbfe; }
+.tree-stage-head { display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: #fafbfe; cursor: pointer; user-select: none; }
+.tree-stage-head:hover { background: var(--primary-50); }
+.tree-stage-head:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.tree-stage-head .caret { width: 22px; height: 22px; flex: none; color: var(--faint); display: flex; align-items: center; justify-content: center; border-radius: 5px; }
+.tree-stage-head .caret svg { width: 14px; height: 14px; transition: transform .12s; }
+.tree-stage-head .caret.open svg { transform: rotate(90deg); }
 .tree-node { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-top: 1px solid var(--line-soft); flex-wrap: wrap; }
 .tree-node:hover { background: #fbfbfe; }
 .tree-node .caret {
   width: 22px; height: 22px; flex: none;
   border: 0; background: none; color: var(--faint);
   display: flex; align-items: center; justify-content: center;
-  border-radius: 5px;
+  border-radius: 5px; cursor: pointer;
 }
 .tree-node .caret:hover { background: var(--bg); color: var(--ink-2); }
 .tree-node .caret svg { width: 13px; height: 13px; transition: transform .12s; }

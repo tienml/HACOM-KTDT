@@ -968,11 +968,14 @@ function renderProcess() {
   // Nếu chưa có result thì dùng loại chung + profile hiện tại
   const result = ui.result || D.suggest(D.typeById('chung'), S.getSurvey());
   const q = normText(ui.treeSearch);
-  // Khi đang tìm kiếm: tự mở tất cả các nhóm có bước khớp để người dùng thấy kết quả ngay
-  if (q) {
+  // Khi nhập từ khóa mới: tự mở các giai đoạn/nhóm có bước khớp để người dùng thấy kết quả ngay.
+  // Chỉ ghi nhận khi từ khóa thay đổi (so với lần render trước) — nhờ vậy sau khi đã tự mở,
+  // người dùng vẫn có thể đóng từng mục bằng cách bấm vào thanh tiêu đề.
+  if (q && q !== ui._lastTreeSearch) {
     D.ALL_NODES.forEach((n) => { if (n.children.length && normText(n.name).includes(q)) ui.treeOpen.add(n.id); });
     D.STAGES.forEach((s) => ui.treeOpen.add(s.id));
   }
+  ui._lastTreeSearch = q;
   const nodes = D.STAGES.flatMap((stage) => {
     const list = [];
     const walk = (node) => {
@@ -983,32 +986,7 @@ function renderProcess() {
     return list;
   });
 
-  const body = D.STAGES.map((stage, i) => {
-    const stageInfo = result.map.get(stage.id) || { status: APPLY.YES, why: '' };
-    const isOpen = ui.treeOpen.has(stage.id);
-    const tone = stageToneClass(i);
-    const childrenHtml = isOpen ? renderTreeChildren(stage.children, result.map, q) : '';
-    // Khi đang tìm: ẩn giai đoạn không có bước nào khớp
-    if (q) {
-      const anyMatch = normText(stage.name).includes(q) || stage.children.some(function hasMatch(n) {
-        return normText(n.name).includes(q) || n.children.some(hasMatch);
-      });
-      if (!anyMatch) return '';
-    }
-    return `
-      <div class="tree-stage">
-        <div class="tree-stage-head">
-          <button class="caret ${isOpen ? 'open' : ''}" data-action="toggle-tree-stage" data-id="${stage.id}">
-            ${ICONS.chevronRight}
-          </button>
-          <div class="stage-ic ${tone}">${STAGE_ICONS[i] || ''}</div>
-          <div class="stage-title" style="flex:1">${i + 1}. ${esc(stage.name)}</div>
-          ${pill(stageInfo.status, false)}
-        </div>
-        ${isOpen ? `<div class="tree-children">${childrenHtml}</div>` : ''}
-      </div>
-    `;
-  }).join('');
+  const body = renderProcessBody(result, q);
 
   const emptySearch = q && !nodes.length
     ? `<div class="empty"><div class="empty-title">Không tìm thấy bước nào khớp với "${esc(ui.treeSearch)}".</div><div>Thử từ khóa khác hoặc xóa ô tìm kiếm.</div></div>`
@@ -1434,9 +1412,9 @@ function bindLocalHandlers() {
   if (tableSearch) {
     tableSearch.oninput = (e) => {
       ui.search = e.target.value;
-      // re-render phần bảng thôi — đơn giản nhất là render lại toàn trang; debounce nhẹ
       clearTimeout(tableSearch._timer);
-      tableSearch._timer = setTimeout(() => render(), 120);
+      // Render lại riêng phần bảng để không dựng lại ô nhập -> giữ nguyên focus và vị trí con trỏ
+      tableSearch._timer = setTimeout(() => rerenderTableOnly(), 120);
     };
   }
   const treeSearch = elMain.querySelector('input[data-action="search-tree"]');
@@ -1444,8 +1422,85 @@ function bindLocalHandlers() {
     treeSearch.oninput = (e) => {
       ui.treeSearch = e.target.value;
       clearTimeout(treeSearch._timer);
-      treeSearch._timer = setTimeout(() => render(), 120);
+      treeSearch._timer = setTimeout(() => rerenderTreeOnly(treeSearch), 120);
     };
+  }
+}
+
+/** Render lại riêng cây quy trình, giữ nguyên ô tìm kiếm (focus + caret) để gõ liên tục được. */
+function rerenderTreeOnly(inputEl) {
+  const procTools = elMain.querySelector('.proc-tools');
+  if (!procTools) { render(); return; }
+  const result = ui.result || D.suggest(D.typeById('chung'), S.getSurvey());
+  const q = normText(ui.treeSearch);
+  if (q && q !== ui._lastTreeSearch) {
+    D.ALL_NODES.forEach((n) => { if (n.children.length && normText(n.name).includes(q)) ui.treeOpen.add(n.id); });
+    D.STAGES.forEach((s) => ui.treeOpen.add(s.id));
+  }
+  ui._lastTreeSearch = q;
+  const nodes = D.STAGES.flatMap((stage) => {
+    const list = [];
+    const walk = (node) => { if (!q || normText(node.name).includes(q)) list.push(node); node.children.forEach(walk); };
+    stage.children.forEach(walk);
+    return list;
+  });
+  const emptySearch = q && !nodes.length
+    ? `<div class="empty"><div class="empty-title">Không tìm thấy bước nào khớp với "${esc(ui.treeSearch)}".</div><div>Thử từ khóa khác hoặc xóa ô tìm kiếm.</div></div>`
+    : '';
+  // Thay thế toàn bộ vùng dưới thanh công cụ (cây hoặc thông báo trống) bằng nội dung mới
+  let region = procTools.nextElementSibling;
+  const fresh = document.createElement('div');
+  fresh.innerHTML = emptySearch || `<div class="tree">${renderProcessBody(result, q)}</div>`;
+  const newRegion = fresh.firstElementChild;
+  if (region) region.replaceWith(newRegion); else procTools.after(newRegion);
+  // Khôi phục focus + vị trí con trỏ vào ô tìm kiếm
+  const caret = inputEl ? inputEl.selectionStart : null;
+  const next = elMain.querySelector('input[data-action="search-tree"]');
+  if (next) {
+    next.focus();
+    try { if (caret != null) next.setSelectionRange(caret, caret); } catch (e) { /* bỏ qua */ }
+  }
+}
+
+/** Phần thân của màn Quy trình (các giai đoạn) — tách ra để render riêng khi tìm kiếm. */
+function renderProcessBody(result, q) {
+  return D.STAGES.map((stage, i) => {
+    const stageInfo = result.map.get(stage.id) || { status: APPLY.YES, why: '' };
+    const isOpen = ui.treeOpen.has(stage.id);
+    const tone = stageToneClass(i);
+    const childrenHtml = isOpen ? renderTreeChildren(stage.children, result.map, q) : '';
+    if (q) {
+      const anyMatch = normText(stage.name).includes(q) || stage.children.some(function hasMatch(n) {
+        return normText(n.name).includes(q) || n.children.some(hasMatch);
+      });
+      if (!anyMatch) return '';
+    }
+    return `
+      <div class="tree-stage">
+        <div class="tree-stage-head" data-action="toggle-tree-stage" data-id="${stage.id}" role="button" tabindex="0" aria-expanded="${isOpen}">
+          <span class="caret ${isOpen ? 'open' : ''}">${ICONS.chevronRight}</span>
+          <div class="stage-ic ${tone}">${STAGE_ICONS[i] || ''}</div>
+          <div class="stage-title" style="flex:1">${i + 1}. ${esc(stage.name)}</div>
+          ${pill(stageInfo.status, false)}
+        </div>
+        ${isOpen ? `<div class="tree-children">${childrenHtml}</div>` : ''}
+      </div>
+    `;
+  }).join('');
+}
+
+/** Render lại riêng card bảng quy trình (màn assistant), giữ nguyên ô tìm kiếm trong bảng. */
+function rerenderTableOnly() {
+  const card = elMain.querySelector('.table-card');
+  if (!card || !ui.result) { render(); return; }
+  const disp = displayResult(ui.result);
+  const fresh = document.createElement('div');
+  fresh.innerHTML = renderTable(disp);
+  card.replaceWith(fresh.firstElementChild);
+  const next = elMain.querySelector('.table-card input[data-action="search-table"]');
+  if (next) {
+    next.focus();
+    try { const c = ui.search.length; next.setSelectionRange(c, c); } catch (e) { /* bỏ qua */ }
   }
 }
 
