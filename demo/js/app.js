@@ -464,7 +464,7 @@ function renderSideSummary(result) {
 function renderModal(text) {
   return `
     <div class="modal-backdrop" data-action="close-modal-bg">
-      <div class="modal" onclick="event.stopPropagation()">
+      <div class="modal" data-action="noop">
         <h3>Tóm tắt quy trình</h3>
         <pre>${esc(text)}</pre>
         <div class="modal-actions">
@@ -678,6 +678,11 @@ function renderProcess() {
   // Nếu chưa có result thì dùng loại chung + profile hiện tại
   const result = ui.result || D.suggest(D.typeById('chung'), S.getSurvey());
   const q = normText(ui.treeSearch);
+  // Khi đang tìm kiếm: tự mở tất cả các nhóm có bước khớp để người dùng thấy kết quả ngay
+  if (q) {
+    D.ALL_NODES.forEach((n) => { if (n.children.length && normText(n.name).includes(q)) ui.treeOpen.add(n.id); });
+    D.STAGES.forEach((s) => ui.treeOpen.add(s.id));
+  }
   const nodes = D.STAGES.flatMap((stage) => {
     const list = [];
     const walk = (node) => {
@@ -692,7 +697,14 @@ function renderProcess() {
     const stageInfo = result.map.get(stage.id) || { status: APPLY.YES, why: '' };
     const isOpen = ui.treeOpen.has(stage.id);
     const tone = stageToneClass(i);
-    const childrenHtml = isOpen ? renderTreeChildren(stage.children, result.map) : '';
+    const childrenHtml = isOpen ? renderTreeChildren(stage.children, result.map, q) : '';
+    // Khi đang tìm: ẩn giai đoạn không có bước nào khớp
+    if (q) {
+      const anyMatch = normText(stage.name).includes(q) || stage.children.some(function hasMatch(n) {
+        return normText(n.name).includes(q) || n.children.some(hasMatch);
+      });
+      if (!anyMatch) return '';
+    }
     return `
       <div class="tree-stage">
         <div class="tree-stage-head">
@@ -708,6 +720,10 @@ function renderProcess() {
     `;
   }).join('');
 
+  const emptySearch = q && !nodes.length
+    ? `<div class="empty"><div class="empty-title">Không tìm thấy bước nào khớp với "${esc(ui.treeSearch)}".</div><div>Thử từ khóa khác hoặc xóa ô tìm kiếm.</div></div>`
+    : '';
+
   return `
     <div class="page-head">
       <h1>Quy trình đầu tư</h1>
@@ -721,13 +737,21 @@ function renderProcess() {
       <button class="btn btn-outline btn-sm" data-action="tree-expand-all">Mở tất cả</button>
       <button class="btn btn-outline btn-sm" data-action="tree-collapse-all">Thu gọn tất cả</button>
     </div>
-    <div class="tree">${body}</div>
+    ${emptySearch || `<div class="tree">${body}</div>`}
   `;
 }
 
-function renderTreeChildren(children, map) {
+function renderTreeChildren(children, map, q) {
   if (!children.length) return '';
   return children.map((child) => {
+    // Khi đang tìm: chỉ hiện nhánh có bước khớp (bỏ qua nhánh không liên quan)
+    if (q) {
+      const selfMatch = normText(child.name).includes(q);
+      const childMatch = child.children.some(function hasMatch(n) {
+        return normText(n.name).includes(q) || n.children.some(hasMatch);
+      });
+      if (!selfMatch && !childMatch) return '';
+    }
     const info = map.get(child.id) || { status: APPLY.YES, why: '' };
     const isOpen = ui.treeOpen.has(child.id);
     const isLeaf = !child.children.length;
@@ -735,9 +759,10 @@ function renderTreeChildren(children, map) {
       `<button class="caret ${isOpen ? 'open' : ''}" data-action="toggle-tree" data-id="${child.id}">${ICONS.chevronRight}</button>`;
     const gate = child.gate ? `<span class="item-gate">GATE</span>` : '';
     const note = child.note ? `<div class="tnote">${esc(child.note)}</div>` : '';
-    const subs = isOpen ? `<div class="tree-children">${renderTreeChildren(child.children, map)}</div>` : '';
+    const subs = isOpen ? `<div class="tree-children">${renderTreeChildren(child.children, map, q)}</div>` : '';
+    const hit = q && normText(child.name).includes(q) ? ' tree-hit' : '';
     return `
-      <div class="tree-node ${info.status === APPLY.NO ? 'na-node' : ''}">
+      <div class="tree-node ${info.status === APPLY.NO ? 'na-node' : ''}${hit}">
         ${caret}
         <span class="tname">${esc(child.name)}</span>
         <span class="kind-tag">${esc(D.KIND_LABEL[child.kind] || child.kind)}</span>
@@ -991,8 +1016,30 @@ document.addEventListener('click', (e) => {
     return;
   }
   if (action === 'close-modal' || action === 'close-modal-bg') {
+    // Chỉ đóng khi click đúng nền tối (backdrop), không đóng khi click vào nội dung modal
+    if (action === 'close-modal-bg' && target !== e.target) return;
     ui.modalSummary = false;
     render();
+    return;
+  }
+  if (action === 'noop') {
+    return;
+  }
+  if (action === 'tour-start') {
+    tourStart();
+    return;
+  }
+  if (action === 'tour-next') {
+    if (tourIdx >= TOUR_STEPS.length - 1) tourEnd(true);
+    else { tourIdx++; tourApplyStep(); }
+    return;
+  }
+  if (action === 'tour-prev') {
+    if (tourIdx > 0) { tourIdx--; tourApplyStep(); }
+    return;
+  }
+  if (action === 'tour-skip') {
+    tourEnd(false);
     return;
   }
   if (action === 'copy-summary') {
@@ -1019,8 +1066,13 @@ document.addEventListener('click', (e) => {
       ask(ui.query || '', ui.result.typeId);
       toast('Đã cập nhật kết quả theo khảo sát mới.', true);
     } else {
-      toast('Chưa có kết quả để cập nhật.');
+      toast('Đã lưu khảo sát — hiển thị quy trình với thông tin mới.', true);
     }
+    // Tự nhảy sang màn Quy trình đầu tư để xem kết quả mới
+    ui.view = 'process';
+    ui.activeNav = 'process';
+    ui.soon = null;
+    render();
     return;
   }
   if (action === 'clear-history') {
@@ -1092,6 +1144,124 @@ function bindLocalHandlers() {
 }
 
 /* ============================================================
+   Hướng dẫn nổi (tour) cho người mới
+   ============================================================ */
+
+const TOUR_KEY = 'hacom-tour-done-v1';
+const TOUR_STEPS = [
+  { view: 'assistant', sel: '.ask-card', title: 'Đặt câu hỏi cho AI', body: 'Gõ loại dự án bạn muốn tìm hiểu rồi nhấn "Gửi câu hỏi". Ví dụ: "Quy trình đầu tư nhà ở xã hội".' },
+  { view: 'assistant', sel: '.quick-chips', title: 'Chọn nhanh loại dự án', body: 'Không cần gõ chữ — bấm chọn một loại dự án có sẵn: nhà ở xã hội, nhà ở thương mại, khu đô thị, khu công nghiệp, hạ tầng kỹ thuật.' },
+  { view: 'assistant', sel: '.content-side', title: 'Tóm tắt quy trình & lưu ý', body: 'Cột phải tóm tắt 8 giai đoạn kèm thời gian dự kiến, cùng các lưu ý về cách hiển thị trạng thái "Áp dụng / Chưa xác định / Không áp dụng".' },
+  { view: 'assistant', sel: '.side-nav', title: 'Menu điều hướng', body: 'Di chuyển giữa các chức năng: Khảo sát & Mục tiêu, Quy trình đầu tư, Lịch sử tư vấn... Mục đang phát triển sẽ được thông báo rõ.' },
+  { view: 'survey', sel: '.survey-list', title: 'Khảo sát nhanh', body: 'Trả lời 7 câu hỏi điều kiện để giải đáp các mục "Chưa xác định". Xong nhấn "Cập nhật kết quả" — hệ thống tự mở bảng quy trình mới.' },
+  { view: 'process', sel: '.tree', title: 'Duyệt cây quy trình', body: 'Mở từng giai đoạn để xem các bước, hồ sơ, tài liệu kèm trạng thái và lý do "Vì sao?". Ô tìm kiếm giúp lọc bước theo từ khóa.' },
+];
+let tourIdx = -1; // -1 = không chạy tour
+
+function tourStart() {
+  tourIdx = 0;
+  tourApplyStep();
+}
+
+function tourEnd(done) {
+  tourIdx = -1;
+  try { localStorage.setItem(TOUR_KEY, '1'); } catch (e) { /* bỏ qua */ }
+  window.removeEventListener('resize', tourPosition);
+  window.removeEventListener('scroll', tourPosition, true);
+  const root = document.getElementById('tour-root');
+  if (root) root.remove();
+  if (done) toast('Hoàn thành hướng dẫn — chúc bạn khám phá hiệu quả!', true);
+}
+
+function tourApplyStep() {
+  const step = TOUR_STEPS[tourIdx];
+  // Chuyển đúng màn hình để phần tử đích tồn tại
+  ui.view = step.view;
+  ui.activeNav = step.view;
+  ui.soon = null;
+  render();
+  requestAnimationFrame(() => {
+    const el = document.querySelector(step.sel);
+    if (el) el.scrollIntoView({ block: 'center' });
+    tourRenderCard();
+    tourPosition();
+  });
+}
+
+function tourRenderCard() {
+  let root = document.getElementById('tour-root');
+  if (!root) {
+    root = document.createElement('div');
+    root.id = 'tour-root';
+    document.body.appendChild(root);
+    window.addEventListener('resize', tourPosition);
+    window.addEventListener('scroll', tourPosition, true);
+  }
+  const step = TOUR_STEPS[tourIdx];
+  const n = TOUR_STEPS.length;
+  root.innerHTML = `
+    <div class="tour-spot"></div>
+    <div class="tour-card" data-action="noop">
+      <button class="tour-x" data-action="tour-skip" title="Đóng hướng dẫn">&times;</button>
+      <div class="tour-step">Bước ${tourIdx + 1}/${n}</div>
+      <div class="tour-title">${esc(step.title)}</div>
+      <div class="tour-body">${esc(step.body)}</div>
+      <div class="tour-dots">${TOUR_STEPS.map((s, i) => `<span class="${i === tourIdx ? 'on' : ''}"></span>`).join('')}</div>
+      <div class="tour-actions">
+        <button class="tour-skip" data-action="tour-skip">Bỏ qua</button>
+        <div class="tour-nav">
+          <button class="btn btn-outline btn-sm" data-action="tour-prev" ${tourIdx === 0 ? 'disabled' : ''}>&larr; Trước</button>
+          <button class="btn btn-primary btn-sm" data-action="tour-next">${tourIdx === n - 1 ? 'Hoàn thành' : 'Tiếp &rarr;'}</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function tourPosition() {
+  if (tourIdx < 0) return;
+  const root = document.getElementById('tour-root');
+  if (!root) return;
+  const spot = root.querySelector('.tour-spot');
+  const card = root.querySelector('.tour-card');
+  const step = TOUR_STEPS[tourIdx];
+  const el = document.querySelector(step.sel);
+  let r = el ? el.getBoundingClientRect() : null;
+  if (r && r.width === 0 && r.height === 0) r = null;
+  const pad = 6;
+  if (r) {
+    spot.style.display = 'block';
+    spot.style.top = (r.top - pad) + 'px';
+    spot.style.left = (r.left - pad) + 'px';
+    spot.style.width = (r.width + pad * 2) + 'px';
+    spot.style.height = (r.height + pad * 2) + 'px';
+  } else {
+    spot.style.display = 'none';
+  }
+  const cw = Math.min(380, window.innerWidth - 24);
+  const ch = card.offsetHeight || 260;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  let top;
+  let left;
+  if (r) {
+    if (r.bottom + pad + ch + 12 < vh) top = r.bottom + pad + 12;
+    else if (r.top - pad - ch - 12 > 0) top = r.top - pad - ch - 12;
+    else top = Math.max(12, (vh - ch) / 2);
+    left = Math.min(Math.max(12, r.left), vw - cw - 12);
+  } else {
+    top = Math.max(12, (vh - ch) / 2);
+    left = Math.max(12, (vw - cw) / 2);
+  }
+  card.style.top = top + 'px';
+  card.style.left = left + 'px';
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && tourIdx >= 0) tourEnd(false);
+});
+
+/* ============================================================
    Khởi tạo
    ============================================================ */
 
@@ -1101,5 +1271,10 @@ if (!S.isPersistent()) {
 }
 
 render();
+
+// Tự mở hướng dẫn nổi ở lần truy cập đầu tiên (ghi nhớ trong localStorage)
+try {
+  if (!localStorage.getItem(TOUR_KEY)) tourStart();
+} catch (e) { /* bỏ qua */ }
 
 })();

@@ -758,13 +758,60 @@ a { color: var(--primary); }
   .search-box { margin-left: 0; }
 }
 
+/* ---------------- Hướng dẫn nổi (tour) ---------------- */
+
+.tour-fab {
+  position: fixed; right: 22px; bottom: 22px; z-index: 60;
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 10px 16px; border: 0; border-radius: 999px;
+  background: var(--primary); color: #fff;
+  font-family: inherit; font-weight: 600; font-size: 13px;
+  box-shadow: 0 8px 24px rgba(90, 69, 230, .35);
+  cursor: pointer;
+}
+.tour-fab svg { width: 16px; height: 16px; }
+.tour-fab:hover { background: #4a37c9; }
+
+#tour-root { position: fixed; inset: 0; z-index: 100; pointer-events: none; }
+.tour-spot {
+  position: fixed; display: none; pointer-events: none;
+  border-radius: 14px; border: 2px solid var(--primary);
+  box-shadow: 0 0 0 100vmax rgba(17, 20, 40, .55);
+  transition: top .25s ease, left .25s ease, width .25s ease, height .25s ease;
+}
+.tour-card {
+  position: fixed; width: 380px; max-width: calc(100vw - 24px);
+  background: #fff; border-radius: 14px; padding: 18px 18px 14px;
+  box-shadow: 0 18px 50px rgba(15, 18, 40, .28);
+  pointer-events: auto;
+}
+.tour-step {
+  font-size: 11px; font-weight: 700; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--primary);
+}
+.tour-title { font-size: 15.5px; font-weight: 700; color: var(--ink); margin-top: 6px; }
+.tour-body { font-size: 13px; color: var(--muted); margin-top: 6px; line-height: 1.55; }
+.tour-dots { display: flex; gap: 5px; margin-top: 12px; }
+.tour-dots span { width: 7px; height: 7px; border-radius: 50%; background: #d8dbe6; }
+.tour-dots span.on { width: 18px; border-radius: 4px; background: var(--primary); }
+.tour-actions { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; }
+.tour-skip { background: none; border: 0; padding: 4px; color: var(--muted); font-size: 12.5px; cursor: pointer; }
+.tour-skip:hover { color: var(--ink); }
+.tour-nav { display: flex; gap: 8px; }
+.tour-x {
+  position: absolute; top: 10px; right: 10px;
+  background: none; border: 0; padding: 2px 6px;
+  font-size: 18px; line-height: 1; color: var(--muted); cursor: pointer;
+}
+.tour-x:hover { color: var(--ink); }
+
 /* ---------------- In ấn ---------------- */
 
 @media print {
   body { background: #fff; }
   .sidebar, .ask-card, .quick-row, .toolbar, .table-foot, .note-card,
   .ai-card, .toast-wrap, .modal-backdrop, .switch-row, .detail-link,
-  .why-btn, .search-box, .proc-tools, .btn, .empty { display: none !important; }
+  .why-btn, .search-box, .proc-tools, .btn, .empty, .tour-fab, #tour-root { display: none !important; }
   .app { grid-template-columns: 1fr; }
   .main { padding: 0; }
   .content-grid { grid-template-columns: 1fr; }

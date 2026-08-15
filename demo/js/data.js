@@ -566,16 +566,28 @@ function computeStatuses(type, profile) {
       status = APPLY.NO;
       why = `Vì nhóm cha "${inherited.name}" không áp dụng nên bước này cũng không áp dụng.`;
     } else if (answered) {
+      // Nhóm chưa có dữ liệu bước con (ví dụ nguồn còn thiếu): không kết luận "Không áp dụng" — để Chưa xác định
+      const emptyGroup = node.kind === 'group' && node.children.length === 0;
       if (answer === node.cond.expected) {
         status = APPLY.YES;
         why = `Vì theo thông tin khảo sát, dự án thuộc trường hợp "${optionLabel(node.cond.field, answer)}" của mục "${fieldLabel(node.cond.field)}".`;
+      } else if (emptyGroup) {
+        status = APPLY.UNKNOWN;
+        why = 'Nguồn quy trình hiện chưa có dữ liệu bước con cho mục này, nên hệ thống để trạng thái "Chưa xác định" thay vì kết luận áp dụng hay không. Cần bổ sung hoặc xác nhận ngoài phạm vi.';
       } else {
         status = APPLY.NO;
         why = `Vì theo thông tin khảo sát, dự án không thuộc trường hợp áp dụng của mục "${fieldLabel(node.cond.field)}".`;
       }
     } else if (rule) {
-      status = rule.status;
-      why = rule.why;
+      // Nhóm chưa có dữ liệu bước con: không kết luận "Không áp dụng" dù rule ghi na — để Chưa xác định
+      const emptyGroup = node.kind === 'group' && node.children.length === 0;
+      if (rule.status === APPLY.NO && emptyGroup) {
+        status = APPLY.UNKNOWN;
+        why = 'Nguồn quy trình hiện chưa có dữ liệu bước con cho mục này, nên hệ thống để trạng thái "Chưa xác định" thay vì kết luận không áp dụng. Cần bổ sung hoặc xác nhận ngoài phạm vi.';
+      } else {
+        status = rule.status;
+        why = rule.why;
+      }
     } else if (inherited.status === APPLY.UNKNOWN) {
       status = APPLY.UNKNOWN;
       why = `Vì nhóm cha "${inherited.name}" chưa xác định nên bước này cũng chưa xác định.`;
