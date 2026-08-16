@@ -161,7 +161,10 @@ function createConvo() {
 
 /** Đảm bảo luôn có một đoạn chat đang mở (gọi khi vào màn chat mà chưa có). */
 function ensureActiveConvo() {
-  if (activeConvo()) return activeConvo();
+  if (activeConvo()) {
+    if (pruneEmptyConvos(ui.activeConvoId)) saveConvos();
+    return activeConvo();
+  }
   if (ui.convos.length) { ui.activeConvoId = ui.convos[0].id; saveConvos(); return ui.convos[0]; }
   return createConvo();
 }
@@ -170,6 +173,16 @@ function ensureActiveConvo() {
 function convoTitleFrom(text) {
   const t = String(text || '').replace(/\s+/g, ' ').trim();
   return t.length > 48 ? t.slice(0, 47) + '…' : (t || 'Đoạn chat mới');
+}
+
+/** Một đoạn chat coi là trống khi chưa có tin nào của người dùng (chỉ còn tin chào). */
+function isConvoEmpty(c) { return !c || !Array.isArray(c.messages) || !c.messages.some((m) => m.role === 'user'); }
+
+/** Dọn các đoạn chat trống còn "dính" trong lịch sử, trừ đoạn có id bằng keepId. Trả về true nếu có thay đổi. */
+function pruneEmptyConvos(keepId) {
+  const before = ui.convos.length;
+  ui.convos = ui.convos.filter((c) => c.id === keepId || !isConvoEmpty(c));
+  return ui.convos.length !== before;
 }
 
 const _convosInit = loadConvos();
@@ -1483,10 +1496,10 @@ function clearConvo() {
   const convo = activeConvo();
   if (!convo) return;
   chatSeq++;
-  convo.messages = [{ role: 'ai', text: WELCOME_TEXT, at: new Date().toISOString() }];
-  convo.summary = null;
-  convo.updatedAt = new Date().toISOString();
-  convo.title = 'Đoạn chat mới';
+  // Xóa hẳn đoạn chat khỏi lịch sử, rồi chuyển sang đoạn gần nhất còn lại (hoặc tạo mới nếu không còn).
+  ui.convos = ui.convos.filter((c) => c.id !== convo.id);
+  ui.activeConvoId = null;
+  ensureActiveConvo();
   saveConvos();
   render();
   toast('Đã xóa đoạn chat này.');
@@ -2260,13 +2273,23 @@ document.addEventListener('click', (e) => {
     return;
   }
   if (action === 'convo-new') {
-    createConvo();
-    render();
+    const cur = activeConvo();
+    if (cur && isConvoEmpty(cur)) {
+      // Đang ở đoạn chat trống: không tạo trùng, chỉ dọn các đoạn trống còn dính.
+      pruneEmptyConvos(cur.id);
+      saveConvos();
+      render();
+    } else {
+      pruneEmptyConvos(null);
+      createConvo();
+      render();
+    }
     return;
   }
   if (action === 'convo-open') {
     const id = target.dataset.id;
     if (id && ui.activeConvoId !== id) {
+      pruneEmptyConvos(id);
       ui.activeConvoId = id;
       saveConvos();
       render();
