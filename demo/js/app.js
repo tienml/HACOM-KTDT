@@ -902,7 +902,7 @@ function renderAssistant() {
   return `
     <div class="page-head page-head-row">
       <div>
-        <h1>AI Assistant</h1>
+        <h1>AI Invest</h1>
         <p class="page-sub">Hỏi AI về quy trình đầu tư và nhận gợi ý chi tiết, chính xác</p>
       </div>
       <label class="switch-row" title="Giải thích dễ hiểu cho người mới bắt đầu">
