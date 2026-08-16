@@ -5,7 +5,8 @@
  *   assistant  - Hỏi / chọn loại dự án, xem bảng kết quả, chi tiết, mục chưa xác định
  *   process    - Duyệt toàn bộ cây quy trình với trạng thái (từ khảo sát + lần hỏi gần nhất)
  *   survey     - Trả lời khảo sát nhanh (7 trường điều kiện) để giải đáp "Chưa xác định"
- *   history    - Lịch sử các lần tư vấn
+ *   chat       - AI Assistant: trò chuyện nhiều lượt qua Gemini; sidebar ngữ cảnh/thống kê
+ *                tự cập nhật từ tóm tắt kết quả mới nhất của đoạn chat
  *
  * Dữ liệu thuần client-side; không upload, không tạo dự án, không checklist.
  */
@@ -69,6 +70,9 @@ const ICONS = {
   trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>',
   user: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
   checks: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 13l4 4L13.5 7"/><path d="M10 13l4 4L22 7"/></svg>',
+  plusSquare: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 8v8M8 12h8"/></svg>',
+  chat: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+  arrowRight: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>',
 };
 
 const STAGE_ICONS = [
@@ -97,7 +101,6 @@ const NAV_ITEMS = [
   { id: 'analysis', label: 'Phân tích AI', icon: ICONS.target },
   { id: 'suggest-portfolio', label: 'Gợi ý danh mục', icon: ICONS.hierarchy },
   { id: 'process', label: 'Quy trình đầu tư', icon: ICONS.flow },
-  { id: 'history', label: 'Lịch sử tư vấn', icon: ICONS.clock },
 ];
 
 // Map view → thực tế hiển thị (một số màn chưa triển khai trong bản demo)
@@ -106,7 +109,6 @@ const VIEW_REAL = {
   'ai-assistant': 'chat',
   'survey': 'survey',
   'process': 'process',
-  'history': 'history',
   'suggest-portfolio': 'portfolio',
 };
 
@@ -114,35 +116,63 @@ const VIEW_REAL = {
    Trạng thái UI
    ============================================================ */
 
-/* Lưu trữ riêng cho cuộc trò chuyện chatbot (tách khỏi HacomStore để không đụng lịch sử tư vấn).
-   Chỉ giữ các tin nhắn đã hoàn tất; giới hạn 60 tin gần nhất. */
-const CHAT_KEY = 'hacom-ktdt-chat-v1';
-const MAX_CHAT = 60;
-function loadChat() {
+/* Lưu trữ riêng cho các đoạn chat của AI Assistant (tách khỏi HacomStore để không đụng gì khác).
+   Mỗi "đoạn chat" là một cuộc hội thoại độc lập; sidebar Ngữ cảnh hiện tại + Thống kê trạng thái
+   chỉ có số liệu khi Gemini đính kèm dòng [TOMTAT]...[/TOMTAT] vào câu trả lời mới nhất của đoạn đó. */
+const CONVOS_KEY = 'hacom-ktdt-convos-v1';
+const MAX_CONVOS = 20;
+const MAX_CHAT_MSG = 60;
+
+const WELCOME_TEXT = 'Xin chào! Tôi là trợ lý AI của Hacom.\nBạn có thể hỏi tôi về quy trình đầu tư theo loại dự án.\nVí dụ: "Quy trình đầu tư nhà ở xã hội là gì?"';
+
+/** { list: [{id,title,createdAt,updatedAt,messages:[{role,text,status?,detail?,at}],summary:null|{typeId,apply,unknown,na,total,stage?,at}}], active: id|null } */
+function loadConvos() {
   try {
-    const raw = localStorage.getItem(CHAT_KEY);
-    if (!raw) return [];
-    const arr = JSON.parse(raw);
-    if (!Array.isArray(arr)) return [];
-    return arr.filter((m) => m && (m.role === 'user' || m.role === 'ai') && typeof m.text === 'string').map((m) => ({
-      role: m.role,
-      text: String(m.text),
-      status: m.status || undefined,
-      detail: m.detail || undefined,
-      at: m.at || undefined,
-      typeId: m.typeId || undefined,
-    }));
-  } catch (e) { return []; }
+    const raw = localStorage.getItem(CONVOS_KEY);
+    if (!raw) return { list: [], active: null };
+    const obj = JSON.parse(raw);
+    const list = Array.isArray(obj && obj.list) ? obj.list.filter((c) => c && c.id && Array.isArray(c.messages)) : [];
+    return { list, active: obj && obj.active || null };
+  } catch (e) { return { list: [], active: null }; }
 }
-function saveChat(list) {
-  try { localStorage.setItem(CHAT_KEY, JSON.stringify(list.slice(-MAX_CHAT))); } catch (e) { /* bỏ qua */ }
+function saveConvos() {
+  try { localStorage.setItem(CONVOS_KEY, JSON.stringify({ list: ui.convos.slice(0, MAX_CONVOS), active: ui.activeConvoId })); } catch (e) { /* bỏ qua */ }
 }
-function pushChat(msg) {
-  ui.chat.push(msg);
-  if (ui.chat.length > MAX_CHAT) ui.chat = ui.chat.slice(-MAX_CHAT);
-  saveChat(ui.chat);
+function activeConvo() { return ui.convos.find((c) => c.id === ui.activeConvoId) || null; }
+function newConvoId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+
+/** Tạo một đoạn chat mới (chỉ có tin chào), đặt làm đoạn đang mở và lưu lại. */
+function createConvo() {
+  const nowIso = new Date().toISOString();
+  const convo = {
+    id: newConvoId(),
+    title: 'Đoạn chat mới',
+    createdAt: nowIso,
+    updatedAt: nowIso,
+    messages: [{ role: 'ai', text: WELCOME_TEXT, at: nowIso }],
+    summary: null,
+  };
+  ui.convos.unshift(convo);
+  if (ui.convos.length > MAX_CONVOS) ui.convos = ui.convos.slice(0, MAX_CONVOS);
+  ui.activeConvoId = convo.id;
+  saveConvos();
+  return convo;
 }
 
+/** Đảm bảo luôn có một đoạn chat đang mở (gọi khi vào màn chat mà chưa có). */
+function ensureActiveConvo() {
+  if (activeConvo()) return activeConvo();
+  if (ui.convos.length) { ui.activeConvoId = ui.convos[0].id; saveConvos(); return ui.convos[0]; }
+  return createConvo();
+}
+
+/** Rút gọn chuỗi dài thành tiêu đề hiển thị trong lịch sử hội thoại. */
+function convoTitleFrom(text) {
+  const t = String(text || '').replace(/\s+/g, ' ').trim();
+  return t.length > 48 ? t.slice(0, 47) + '…' : (t || 'Đoạn chat mới');
+}
+
+const _convosInit = loadConvos();
 const ui = {
   view: 'assistant',
   activeNav: 'assistant', // mục nav đang được tô sáng
@@ -153,17 +183,16 @@ const ui = {
   search: '',
   beginner: S.getBeginner(),
   detailStageId: null,
-  historyId: null,       // id dòng lịch sử của lần tư vấn hiện tại (để lưu lại kết quả AI)
   whyOpen: new Set(),  // node.id đang mở why-box trong màn detail/process
   treeOpen: new Set(['S01']),
   treeSearch: '',
   modalSummary: false,
   // Gợi ý danh mục đầu tư (so sánh các loại hình + AI xếp hạng)
   portfolio: null,        // { status: 'idle'|'loading'|'ok'|'fallback', ranks: [{id,rank,reason}], reason? }
-  // Chatbot: cuộc trò chuyện nhiều lượt với trợ lý AI (không làm thay đổi màn Trang chủ)
-  chat: loadChat(),       // [{role:'user'|'ai', text, status?, at?, typeId?}]
-  chatTypeId: null,       // loại dự án nhận diện gần nhất trong chat (để hiển thị sidebar)
-  chatMore: false,        // mở rộng danh sách câu hỏi gợi ý bên phải
+  // AI Assistant: nhiều đoạn chat; sidebar Ngữ cảnh + Thống kê phụ thuộc tóm tắt mới nhất của Gemini.
+  convos: _convosInit.list,            // [{id,title,createdAt,updatedAt,messages:[...],summary}]
+  activeConvoId: _convosInit.active,   // id đoạn chat đang mở
+  historyAll: false,                   // lịch sử hội thoại: hiện tất cả hay chỉ 5 mới nhất
 };
 
 const elMain = document.getElementById('main');
@@ -240,7 +269,6 @@ function ask(query, typeId) {
   ui.aiAnswer = { status: 'loading' };
   // Bảng quy trình giờ do LLM đề xuất: hiện trạng thái đang phân tích, fallback về quy tắc khi lỗi
   ui.proposal = { status: 'loading', first: true };
-  ui.historyId = S.addHistory({ query: query || type.label, typeId: type.id, typeLabel: type.label, counts: result.counts, snapshot: makeSnapshot(result) });
   render();
   requestAIAnalysis();
   requestProposal();
@@ -271,13 +299,6 @@ function makeSnapshot(result) {
   const map = {};
   result.map.forEach((v, k) => { map[k] = v; });
   return { map, stages: plainStages(result.stages), counts: result.counts, aiAnswer: null, proposal: null };
-}
-
-function saveSnapshotPart(part) {
-  if (!ui.historyId) return;
-  const item = S.getHistory().find((h) => h.id === ui.historyId);
-  if (!item) return;
-  S.updateHistory(ui.historyId, { snapshot: Object.assign({}, item.snapshot, part) });
 }
 
 function statusLabel(status) {
@@ -393,8 +414,6 @@ async function requestAIAnalysis() {
     if (seq !== aiSeq) return;
     ui.aiAnswer = { status: 'error' };
   }
-  // Lưu lại kết quả phân tích để "Xem lại" không phải gọi lại AI
-  saveSnapshotPart({ aiAnswer: ui.aiAnswer });
   // Patch trực tiếp vào card để không làm mất focus khi người dùng đang thao tác ở màn khác
   const body = document.querySelector('.ai-answer-body');
   if (body) body.innerHTML = aiAnswerHTML();
@@ -510,8 +529,6 @@ async function requestProposal() {
     next = { status: 'fallback', reason: 'error' };
   }
   ui.proposal = next;
-  // Lưu kết quả đề xuất vào lịch sử (stages dạng thuần để localStorage gọn)
-  saveSnapshotPart({ proposal: next.status === 'ok' ? { status: 'ok', stages: plainStages(next.stages) } : next });
   render();
 }
 
@@ -967,10 +984,14 @@ function buildChatContext(question) {
   return lines.join('\n');
 }
 
+/** Đọc loại dự án đang hiển thị ở sidebar chat. Ưu tiên convo.summary.typeId; nếu chưa có thì đoán từ tin nhắn người dùng gần nhất trong đoạn chat đang mở. */
 function currentChatType() {
-  if (ui.chatTypeId) return D.typeById(ui.chatTypeId);
-  for (let i = ui.chat.length - 1; i >= 0; i--) {
-    if (ui.chat[i].role === 'user' && ui.chat[i].text) return D.identifyType(ui.chat[i].text);
+  const convo = activeConvo();
+  if (convo && convo.summary && convo.summary.typeId) return D.typeById(convo.summary.typeId);
+  if (convo && Array.isArray(convo.messages)) {
+    for (let i = convo.messages.length - 1; i >= 0; i--) {
+      if (convo.messages[i].role === 'user' && convo.messages[i].text) return D.identifyType(convo.messages[i].text);
+    }
   }
   return D.typeById('chung');
 }
@@ -1001,22 +1022,40 @@ function donutSVG(counts) {
   return `<svg class="chat-donut" viewBox="0 0 100 100" width="100" height="100"><g transform="rotate(-90 50 50)">${circles}</g></svg>`;
 }
 
-function chatResultCardHTML(typeId) {
-  const type = D.typeById(typeId);
-  const result = D.suggest(type, S.getSurvey());
-  const c = result.counts;
+/** Card kết quả: ưu tiên số liệu Gemini đã đính kèm [TOMTAT] (msg.counts) để khớp với Thống kê sidebar;
+ *  nếu chưa có thì fallback về rule engine theo loại dự án. */
+function chatResultCardHTML(typeId, counts) {
+  const c = (counts && typeof counts.apply === 'number')
+    ? { apply: counts.apply, unknown: counts.unknown, na: counts.na, total: counts.total || (counts.apply + counts.unknown + counts.na) }
+    : D.suggest(D.typeById(typeId), S.getSurvey()).counts;
   return `
     <div class="chat-result-card" data-type="${esc(typeId)}">
       <div class="chat-result-title">Tóm tắt kết quả</div>
       <div class="chat-result-stats">
-        <div class="cr-stat"><span class="cr-num cr-ok">${c.apply}</span><span class="cr-label">Áp dụng</span></div>
-        <div class="cr-stat"><span class="cr-num cr-unknown">${c.unknown}</span><span class="cr-label">Chưa xác định</span></div>
-        <div class="cr-stat"><span class="cr-num cr-na">${c.na}</span><span class="cr-label">Không áp dụng</span></div>
+        <div class="cr-stat cr-stat-ok"><span class="cr-num cr-ok">${c.apply}</span><span class="cr-label">Áp dụng</span></div>
+        <div class="cr-stat cr-stat-unknown"><span class="cr-num cr-unknown">${c.unknown}</span><span class="cr-label">Chưa xác định</span></div>
+        <div class="cr-stat"><span class="cr-num">${c.na}</span><span class="cr-label">Không áp dụng</span></div>
         <div class="cr-stat"><span class="cr-num">${c.total}</span><span class="cr-label">Tổng số mục</span></div>
       </div>
       <div class="chat-result-actions">
-        <button class="btn btn-outline btn-sm" data-action="chat-open-process" data-type="${esc(typeId)}">Xem chi tiết quy trình ${ICONS.chevronRight}</button>
-        <button class="btn btn-outline btn-sm" data-action="chat-copy-summary" data-type="${esc(typeId)}">${ICONS.copy} Copy tóm tắt</button>
+        <button class="btn btn-outline-primary btn-sm" data-action="chat-open-process" data-type="${esc(typeId)}">Xem chi tiết quy trình ${ICONS.arrowRight}</button>
+        <button class="btn btn-outline btn-sm" data-action="chat-summary-modal" data-type="${esc(typeId)}">${ICONS.file} Tóm tắt quy trình</button>
+      </div>
+    </div>
+  `;
+}
+
+/** Card kết quả khi câu trả lời tập trung vào một giai đoạn cụ thể (theo [TOMTAT].stage). */
+function chatStageCardHTML(typeId, stageId) {
+  const type = D.typeById(typeId);
+  const stage = D.STAGES.find((s) => s.id === stageId);
+  if (!stage) return '';
+  return `
+    <div class="chat-stage-card" data-type="${esc(typeId)}" data-stage="${esc(stageId)}">
+      <div class="chat-stage-title">Giai đoạn ${stage.stageIndex}: ${esc(stage.name)}</div>
+      <div class="chat-stage-desc">Giai đoạn này gồm ${stage.children.length} bước chính.</div>
+      <div class="chat-result-actions">
+        <button class="btn btn-outline-primary btn-sm" data-action="chat-open-stage" data-type="${esc(typeId)}" data-stage="${esc(stageId)}">Xem chi tiết giai đoạn ${stage.stageIndex} ${ICONS.arrowRight}</button>
       </div>
     </div>
   `;
@@ -1083,7 +1122,17 @@ function chatBubbleHTML(msg) {
       </div>`;
   }
   // ok
-  const resultCard = (msg.typeId && msg.typeId !== 'chung') ? chatResultCardHTML(msg.typeId) : '';
+  let resultCard = '';
+  if (msg.stage) {
+    resultCard = chatStageCardHTML(msg.typeId || 'chung', msg.stage);
+  } else if (msg.typeId && msg.typeId !== 'chung') {
+    // Ưu tiên số liệu gắn liền tin nhắn này; nếu là tin cũ chưa lưu counts thì mượn summary của đoạn chat
+    // khi cùng loại dự án để card khớp với Thống kê sidebar.
+    const convo = activeConvo();
+    const s = convo && convo.summary;
+    const counts = msg.counts || (s && s.typeId === msg.typeId ? s : null);
+    resultCard = chatResultCardHTML(msg.typeId, counts);
+  }
   return `
     <div class="chat-msg ai">
       ${avatar}
@@ -1097,41 +1146,129 @@ function chatBubbleHTML(msg) {
     </div>`;
 }
 
+/** Nhãn thời gian cho mục lịch sử hội thoại: hôm nay -> giờ, hôm qua, hoặc ngày dd/mm/yyyy. */
+function fmtConvoTime(iso) {
+  if (!iso) return '';
+  try {
+    const d = new Date(iso);
+    const today = new Date();
+    const sameDay = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+    if (sameDay(d, today)) return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+    const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1);
+    if (sameDay(d, yesterday)) return 'Hôm qua';
+    const dd = String(d.getDate()).padStart(2, '0');
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    return `${dd}/${mm}/${d.getFullYear()}`;
+  } catch (e) { return ''; }
+}
+
+/** Nhóm các đoạn chat theo ngày (hôm nay / hôm qua / ngày cụ thể), sắp xếp mới nhất trước. */
+function groupConvosByDay(list) {
+  const sorted = list.slice().sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0));
+  const today = new Date();
+  const yesterday = new Date(today); yesterday.setDate(today.getDate() - 1);
+  const dayKey = (iso) => {
+    const d = new Date(iso || 0);
+    const same = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+    if (same(d, today)) return 'today';
+    if (same(d, yesterday)) return 'yesterday';
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+  const labelOf = (key) => {
+    if (key === 'today') return 'Hôm nay';
+    if (key === 'yesterday') return 'Hôm qua';
+    const parts = key.split('-');
+    return `${parts[2]}/${parts[1]}/${parts[0]}`;
+  };
+  const groups = [];
+  let lastKey = null;
+  sorted.forEach((c) => {
+    const key = dayKey(c.updatedAt);
+    if (key !== lastKey) { groups.push({ type: 'header', label: labelOf(key) }); lastKey = key; }
+    groups.push({ type: 'item', convo: c });
+  });
+  return groups;
+}
+
+/** Danh sách lịch sử hội thoại trong sidebar phải: tiêu đề nhóm + mục có icon/tiêu đề/thời gian. */
+function renderConvoList() {
+  const list = ui.convos || [];
+  if (!list.length) return `<div class="convo-empty">Chưa có đoạn chat nào.</div>`;
+  const groups = groupConvosByDay(list);
+  const shownGroups = ui.historyAll ? groups : groups.slice(0, 5 + groups.filter((g) => g.type === 'header').length > 5 ? groups : groups.slice(0, Math.max(5, 6)));
+  // Khi thu gọn: lấy tối đa 5 mục item đầu tiên (kèm các header đi kèm chúng)
+  let rendered;
+  if (ui.historyAll) {
+    rendered = groups;
+  } else {
+    rendered = [];
+    let itemCount = 0;
+    for (const g of groups) {
+      if (g.type === 'item') { if (itemCount >= 5) break; itemCount++; }
+      rendered.push(g);
+    }
+  }
+  return rendered.map((g) => {
+    if (g.type === 'header') return `<div class="convo-group-label">${esc(g.label)}</div>`;
+    const c = g.convo;
+    const active = c.id === ui.activeConvoId ? ' active' : '';
+    const title = esc(c.title || 'Đoạn chat mới');
+    const time = fmtConvoTime(c.updatedAt);
+    return `<button class="convo-item${active}" data-action="convo-open" data-id="${esc(c.id)}"><span class="convo-icon">${ICONS.chat}</span><span class="convo-title">${title}</span><span class="convo-time">${time}</span></button>`;
+  }).join('');
+}
+
 function renderChatSide() {
+  const convo = activeConvo();
+  const summary = convo && convo.summary;
+  // Nếu Gemini đã đính kèm [TOMTAT] thì dùng số liệu từ đó (đã phản ánh đúng ngữ cảnh câu hỏi);
+  // ngược lại fallback về rule engine với loại dự án đoán được.
   const type = currentChatType();
-  const result = D.suggest(type, S.getSurvey());
-  const c = result.counts;
-  const total = c.total || 1;
-  const pctApply = Math.round(c.apply / total * 1000) / 10;
-  const pctUnknown = Math.round(c.unknown / total * 1000) / 10;
-  const pctNa = Math.round(c.na / total * 1000) / 10;
-  const updated = new Date().toLocaleDateString('vi-VN');
-  const suggList = ui.chatMore ? CHAT_SUGGESTIONS : CHAT_SUGGESTIONS.slice(0, 4);
+  let counts;
+  if (summary && typeof summary.apply === 'number' && typeof summary.unknown === 'number' && typeof summary.na === 'number') {
+    counts = { apply: summary.apply, unknown: summary.unknown, na: summary.na, total: summary.total || (summary.apply + summary.unknown + summary.na) };
+  } else {
+    const result = D.suggest(type, S.getSurvey());
+    counts = result.counts;
+  }
+  const total = counts.total || 1;
+  const pctApply = Math.round(counts.apply / total * 1000) / 10;
+  const pctUnknown = Math.round(counts.unknown / total * 1000) / 10;
+  const pctNa = Math.round(counts.na / total * 1000) / 10;
+  const updated = summary && summary.at
+    ? new Date(summary.at).toLocaleDateString('vi-VN')
+    : new Date().toLocaleDateString('vi-VN');
+  const sourceNote = summary ? 'Nguồn: AI tóm tắt từ đoạn chat' : 'Nguồn: Cấu trúc quy trình đầu tư Hacom';
+  const allLink = (ui.convos || []).length > 5
+    ? `<button class="convo-view-all" data-action="chat-toggle-history">${ui.historyAll ? 'Thu gọn' : 'Xem tất cả'} ${ICONS.arrowRight || ICONS.chevronRight}</button>`
+    : '';
   return `
     <div class="card chat-side-card">
+      <div class="chat-side-head-row">
+        <div class="chat-side-title">Lịch sử hội thoại</div>
+        ${allLink}
+      </div>
+      <div class="convo-list">
+        ${renderConvoList()}
+      </div>
+    </div>
+    <div class="card chat-side-card">
       <div class="chat-side-title">Ngữ cảnh hiện tại</div>
-      <div class="chat-side-type">${typeChip(type, true)}</div>
-      <div class="chat-side-meta">Nguồn: Cấu trúc quy trình đầu tư Hacom</div>
+      <div class="chat-side-row"><span class="chat-side-key">Loại dự án:</span>${typeChip(type, true)}</div>
+      <div class="chat-side-meta">${sourceNote}</div>
       <div class="chat-side-meta">Cập nhật: ${updated}</div>
     </div>
     <div class="card chat-side-card">
       <div class="chat-side-title">Thống kê trạng thái</div>
       <div class="chat-donut-row">
-        ${donutSVG(c)}
+        ${donutSVG(counts)}
         <div class="chat-legend">
-          <div class="chat-legend-row"><span class="lg-dot lg-apply"></span>Áp dụng (${c.apply})<span class="lg-pct">${pctApply}%</span></div>
-          <div class="chat-legend-row"><span class="lg-dot lg-unknown"></span>Chưa xác định (${c.unknown})<span class="lg-pct">${pctUnknown}%</span></div>
-          <div class="chat-legend-row"><span class="lg-dot lg-na"></span>Không áp dụng (${c.na})<span class="lg-pct">${pctNa}%</span></div>
+          <div class="chat-legend-row"><span class="lg-dot lg-apply"></span>Áp dụng (${counts.apply})<span class="lg-pct">${pctApply}%</span></div>
+          <div class="chat-legend-row"><span class="lg-dot lg-unknown"></span>Chưa xác định (${counts.unknown})<span class="lg-pct">${pctUnknown}%</span></div>
+          <div class="chat-legend-row"><span class="lg-dot lg-na"></span>Không áp dụng (${counts.na})<span class="lg-pct">${pctNa}%</span></div>
         </div>
       </div>
-      <div class="chat-side-meta">Tổng số mục: ${c.total}</div>
-    </div>
-    <div class="card chat-side-card">
-      <div class="chat-side-title">Câu hỏi gợi ý</div>
-      <div class="chat-suggest-list">
-        ${suggList.map((q) => `<button class="chat-suggest-btn" data-action="chat-chip" data-q="${esc(q)}">${esc(q)}</button>`).join('')}
-      </div>
-      <button class="chat-more-btn" data-action="chat-toggle-more">${ui.chatMore ? 'Thu gọn câu hỏi' : 'Xem thêm câu hỏi'} ${ICONS.chevronDown}</button>
+      <div class="chat-side-meta">Tổng số mục: ${counts.total}</div>
     </div>
     <div class="card chat-side-card chat-note-card">
       <div class="chat-side-title">${ICONS.lightbulb} Lưu ý</div>
@@ -1141,27 +1278,33 @@ function renderChatSide() {
 }
 
 function renderChat() {
-  const empty = !ui.chat.length;
-  const messages = ui.chat.map(chatBubbleHTML).join('');
-  const welcome = empty ? chatBubbleHTML({ role: 'ai', text: 'Xin chào! Tôi là trợ lý Hacom AI Invest. Hãy đặt câu hỏi về quy trình đầu tư dự án — tôi sẽ trả lời dựa trên dữ liệu quy trình thực và khảo sát của bạn.' }) : '';
+  const convo = ensureActiveConvo();
+  const messages = (convo && convo.messages) || [];
+  const empty = messages.length <= 1; // chỉ còn tin chào
+  const bubbles = messages.map(chatBubbleHTML).join('');
+  const chips = CHAT_SUGGESTIONS.map((q) => `<button class="chat-chip" data-action="chat-chip" data-q="${esc(q)}">${esc(q)}</button>`).join('');
   return `
     <div class="page-head">
       <h1>AI Assistant</h1>
-      <p class="page-sub">Hỏi AI về quy trình đầu tư và nhận gợi ý chi tiết, chính xác</p>
+      <p class="page-sub">Hỏi AI về quy trình đầu tư, nhận gợi ý chi tiết và chính xác</p>
     </div>
     <div class="content-grid">
       <div class="content-main">
         <div class="card chat-card">
           <div class="chat-head">
-            <button class="btn btn-outline btn-sm" data-action="chat-clear" ${empty ? 'disabled' : ''}>${ICONS.trash} Xóa cuộc trò chuyện</button>
+            <button class="btn btn-outline-primary btn-sm" data-action="convo-new">${ICONS.plusSquare} Đoạn chat mới</button>
+            <button class="chat-clear-icon" data-action="chat-clear" ${empty ? 'disabled' : ''} title="Xóa đoạn chat này" aria-label="Xóa đoạn chat này">${ICONS.trash}</button>
           </div>
           <div class="chat-box" id="chat-box">
-            ${welcome}
-            ${messages}
+            ${bubbles}
           </div>
           <div class="chat-composer">
+            <div class="chat-chips-wrap">
+              <div class="chat-chips-label">Gợi ý câu hỏi khác:</div>
+              <div class="chat-chips-row">${chips}</div>
+            </div>
             <div class="chat-composer-row">
-              <input class="chat-input" id="chat-input" placeholder="Nhập câu hỏi của bạn... (Enter để gửi)" autocomplete="off" data-action="chat-input">
+              <input class="chat-input" id="chat-input" placeholder="Nhập câu hỏi của bạn..." autocomplete="off" data-action="chat-input">
               <button class="chat-send-btn" data-action="chat-send" aria-label="Gửi">${ICONS.send}</button>
             </div>
             <div class="chat-disclaimer">AI có thể mắc sai sót. Hãy tham khảo thêm trước khi quyết định.</div>
@@ -1172,6 +1315,7 @@ function renderChat() {
         ${renderChatSide()}
       </aside>
     </div>
+    ${ui.modalSummary && ui.result ? renderModal(summaryText(ui.result, ui.beginner)) : ''}
   `;
 }
 
@@ -1210,7 +1354,9 @@ async function streamChatText(res, loadingBubble) {
           full += t;
           if (loadingBubble) {
             loadingBubble.classList.remove('ai-loading');
-            loadingBubble.innerHTML = `<div class="ai-text">${formatAIText(full)}</div>`;
+            // Ẩn dòng [TOMTAT]...[/TOMTAT] khỏi bản xem trước đang stream để tránh nháy trên màn hình
+            const visible = full.replace(/\[TOMTAT\][\s\S]*$/, '');
+            loadingBubble.innerHTML = `<div class="ai-text">${formatAIText(visible)}</div>`;
             chatScrollBottom();
           }
         }
@@ -1220,14 +1366,49 @@ async function streamChatText(res, loadingBubble) {
   return full;
 }
 
+/** Gemini đính kèm đúng một dòng máy đọc ở cuối mỗi câu trả lời: [TOMTAT]{json}[/TOMTAT].
+    Hàm này tách dòng đó ra khỏi văn bản hiển thị và trả về summary (hoặc null nếu không có/không hợp lệ). */
+function parseTomtat(full) {
+  const raw = String(full || '');
+  const m = raw.match(/\[TOMTAT\]\s*(\{[\s\S]*?\})\s*\[\/TOMTAT\]/);
+  if (!m) return { text: raw, summary: null };
+  let summary = null;
+  try {
+    const o = JSON.parse(m[1]);
+    // Chỉ chấp nhận type id hợp lệ theo D.typeById; ngoài ra coi là "chung"
+    const guessed = D.typeById(o && o.type);
+    const typeId = (guessed && guessed.id === o.type) ? o.type : 'chung';
+    const num = (v) => (typeof v === 'number' && isFinite(v) && v >= 0) ? Math.round(v) : 0;
+    const stageRaw = typeof o.stage === 'string' ? o.stage.trim() : '';
+    const stageValid = D.STAGES.some((s) => s.id === stageRaw);
+    summary = {
+      typeId,
+      apply: num(o.apply),
+      unknown: num(o.unknown),
+      na: num(o.na),
+      total: num(o.total),
+      stage: stageValid ? stageRaw : '',
+      at: new Date().toISOString(),
+    };
+  } catch (e) { summary = null; }
+  const text = raw.replace(m[0], '').replace(/\s+$/, '');
+  return { text, summary };
+}
+
 let chatSeq = 0;
 async function sendChat(text) {
   const q = String(text || '').trim();
   if (!q) return;
   const seq = ++chatSeq;
-  const type = D.identifyType(q);
+  const convo = ensureActiveConvo();
+  const convoId = convo.id;
   const nowIso = new Date().toISOString();
-  pushChat({ role: 'user', text: q, at: nowIso });
+  convo.messages.push({ role: 'user', text: q, at: nowIso });
+  if (convo.messages.length > MAX_CHAT_MSG) convo.messages = convo.messages.slice(-MAX_CHAT_MSG);
+  if (!convo.title || convo.title === 'Đoạn chat mới') convo.title = convoTitleFrom(q);
+  convo.updatedAt = nowIso;
+  saveConvos();
+  renderChatSideInto();
   const box = document.getElementById('chat-box');
   if (box) {
     box.insertAdjacentHTML('beforeend', chatBubbleHTML({ role: 'user', text: q, at: nowIso }));
@@ -1259,26 +1440,56 @@ async function sendChat(text) {
     if (seq !== chatSeq) return;
     next = { role: 'ai', status: 'error', text: '' };
   }
+  // Tìm lại đoạn chat gốc (người dùng có thể đã chuyển sang đoạn khác trong lúc chờ)
+  const target = ui.convos.find((c) => c.id === convoId);
+  if (!target) return;
   next.at = new Date().toISOString();
-  next.typeId = type.id;
-  ui.chatTypeId = type.id;
-  pushChat(next);
+  if (next.status === 'ok') {
+    const parsed = parseTomtat(next.text);
+    next.text = parsed.text;
+    if (parsed.summary) {
+      target.summary = parsed.summary;
+      next.typeId = parsed.summary.typeId;
+      next.stage = parsed.summary.stage || '';
+      if (typeof parsed.summary.apply === 'number') {
+        next.counts = {
+          apply: parsed.summary.apply,
+          unknown: parsed.summary.unknown,
+          na: parsed.summary.na,
+          total: parsed.summary.total || (parsed.summary.apply + parsed.summary.unknown + parsed.summary.na),
+        };
+      }
+    } else {
+      next.typeId = D.identifyType(q).id;
+    }
+  } else {
+    next.typeId = D.identifyType(q).id;
+  }
+  target.messages.push(next);
+  if (target.messages.length > MAX_CHAT_MSG) target.messages = target.messages.slice(-MAX_CHAT_MSG);
+  target.updatedAt = next.at;
+  saveConvos();
   if (loadingBubble && loadingBubble.closest('.chat-msg')) {
     loadingBubble.closest('.chat-msg').outerHTML = chatBubbleHTML(next);
     chatScrollBottom();
     renderChatSideInto();
-  } else {
+  } else if (ui.view === 'chat') {
     render();
   }
+  renderChatSideInto();
 }
 
-function clearChat() {
-  ui.chat = [];
-  ui.chatTypeId = null;
-  saveChat(ui.chat);
+function clearConvo() {
+  const convo = activeConvo();
+  if (!convo) return;
   chatSeq++;
+  convo.messages = [{ role: 'ai', text: WELCOME_TEXT, at: new Date().toISOString() }];
+  convo.summary = null;
+  convo.updatedAt = new Date().toISOString();
+  convo.title = 'Đoạn chat mới';
+  saveConvos();
   render();
-  toast('Đã xóa cuộc trò chuyện.');
+  toast('Đã xóa đoạn chat này.');
 }
 
 function renderTable(result) {
@@ -1811,7 +2022,6 @@ function reopenHistory(item) {
   ui.search = '';
   ui.detailStageId = null;
   ui.modalSummary = false;
-  ui.historyId = null; // đang xem lại, không phải lần tư vấn mới -> không ghi đè snapshot cũ
   ui.aiAnswer = snap.aiAnswer || { status: 'error' };
   const p = snap.proposal;
   ui.proposal = p
@@ -2041,12 +2251,26 @@ document.addEventListener('click', (e) => {
     return;
   }
   if (action === 'chat-clear') {
-    clearChat();
+    clearConvo();
     return;
   }
-  if (action === 'chat-toggle-more') {
-    ui.chatMore = !ui.chatMore;
+  if (action === 'chat-toggle-history') {
+    ui.historyAll = !ui.historyAll;
     renderChatSideInto();
+    return;
+  }
+  if (action === 'convo-new') {
+    createConvo();
+    render();
+    return;
+  }
+  if (action === 'convo-open') {
+    const id = target.dataset.id;
+    if (id && ui.activeConvoId !== id) {
+      ui.activeConvoId = id;
+      saveConvos();
+      render();
+    }
     return;
   }
   if (action === 'chat-open-process') {
@@ -2059,10 +2283,22 @@ document.addEventListener('click', (e) => {
     render();
     return;
   }
-  if (action === 'chat-copy-summary') {
+  if (action === 'chat-summary-modal') {
     const t = D.typeById(target.dataset.type);
     ui.result = D.suggest(t, S.getSurvey());
-    copySummary();
+    ui.modalSummary = true;
+    render();
+    return;
+  }
+  if (action === 'chat-open-stage') {
+    const t = D.typeById(target.dataset.type);
+    ui.result = D.suggest(t, S.getSurvey());
+    ui.detailStageId = target.dataset.stage;
+    ui.whyOpen.clear();
+    ui.view = 'assistant';
+    ui.activeNav = 'process';
+    ui.soon = null;
+    render();
     return;
   }
   if (action === 'run-portfolio') {

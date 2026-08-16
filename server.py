@@ -67,7 +67,13 @@ CHAT_PROMPT = (
     '(b) Với câu hỏi xã giao (xin chào, cảm ơn…), hoặc câu hỏi tổng quát ngoài phạm vi dữ liệu, '
     'trả lời tự nhiên, ngắn gọn, thân thiện như một chatbot thực thụ; vẫn giữ vai trò trợ lý đầu tư BĐS; '
     'khéo léo gợi về chủ đề đầu tư/quy trình khi hợp lý, nhưng KHÔNG ép buộc. '
-    'Luôn dùng tiếng Việt.'
+    '(c) CUỐI MỖI câu trả lời, thêm đúng một dòng cuối cùng theo định dạng máy đọc (không phải markdown, không code fence): '
+    '[TOMTAT]{"type":"<id>","stage":"<S0x hoặc chuỗi rỗng>","apply":N,"unknown":N,"na":N,"total":N}[/TOMTAT] '
+    'trong đó <id> là id loại dự án có trong ngữ cảnh (noxa/nthuongmai/khudothi/khucongnghiep/hatang/chung); '
+    'nếu câu trả lời không gắn với một loại dự án cụ thể thì dùng "chung" và các số đều bằng 0; '
+    'số liệu lấy ĐÚNG từ phần Thống kê của ngữ cảnh loại dự án được hỏi, không bịa số; '
+    '"stage" là id giai đoạn (S01..S08) nếu câu hỏi/trả lời tập trung vào một giai đoạn cụ thể, ngược lại để chuỗi rỗng "". '
+    'Luôn dùng tiếng Việt cho phần trả lời người đọc.'
 )
 
 # Gợi ý danh mục: so sánh các loại hình dự án, trả về JSON thuần để frontend dựng bảng + gợi ý AI.
