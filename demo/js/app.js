@@ -2492,14 +2492,28 @@ function rerenderTableOnly() {
    Hướng dẫn nổi (tour) cho người mới
    ============================================================ */
 
-const TOUR_KEY = 'hacom-tour-done-v1';
+const TOUR_KEY = 'hacom-tour-done-v2';
+// Mỗi bước: view (giá trị ui.view thực), nav (tùy chọn, mặc định = view) trỏ tab đang sáng,
+// sel là selector phần tử được highlight, title/body là nội dung thẻ hướng dẫn.
 const TOUR_STEPS = [
-  { view: 'assistant', sel: '.ask-card', title: 'Đặt câu hỏi cho AI', body: 'Gõ loại dự án bạn muốn tìm hiểu rồi nhấn "Gửi câu hỏi". Ví dụ: "Quy trình đầu tư nhà ở xã hội".' },
-  { view: 'assistant', sel: '.quick-chips', title: 'Chọn nhanh loại dự án', body: 'Không cần gõ chữ — bấm chọn một loại dự án có sẵn: nhà ở xã hội, nhà ở thương mại, khu đô thị, khu công nghiệp, hạ tầng kỹ thuật.' },
-  { view: 'assistant', sel: '.content-side', title: 'Tóm tắt quy trình & lưu ý', body: 'Cột phải tóm tắt 8 giai đoạn kèm thời gian dự kiến, cùng các lưu ý về cách hiển thị trạng thái "Áp dụng / Chưa xác định / Không áp dụng".' },
-  { view: 'assistant', sel: '.side-nav', title: 'Menu điều hướng', body: 'Di chuyển giữa các chức năng: Khảo sát & Mục tiêu, Quy trình đầu tư, Lịch sử tư vấn... Mục đang phát triển sẽ được thông báo rõ.' },
-  { view: 'survey', sel: '.survey-list', title: 'Khảo sát nhanh', body: 'Trả lời 7 câu hỏi điều kiện để giải đáp các mục "Chưa xác định". Xong nhấn "Cập nhật kết quả" — hệ thống tự mở bảng quy trình mới.' },
-  { view: 'process', sel: '.tree', title: 'Duyệt cây quy trình', body: 'Mở từng giai đoạn để xem các bước, hồ sơ, tài liệu kèm trạng thái và lý do "Vì sao?". Ô tìm kiếm giúp lọc bước theo từ khóa.' },
+  { view: 'assistant', sel: '.ask-card',
+    title: 'Đặt câu hỏi cho AI',
+    body: 'Gõ loại dự án hoặc vấn đề bạn quan tâm rồi nhấn "Gửi câu hỏi". Ví dụ: "Quy trình đầu tư nhà ở xã hội".' },
+  { view: 'assistant', sel: '.quick-chips',
+    title: 'Chọn nhanh loại dự án',
+    body: 'Không cần gõ chữ — bấm một chip có sẵn để xem ngay quy trình của loại hình đó: nhà ở xã hội, thương mại, khu đô thị, khu công nghiệp, hạ tầng kỹ thuật.' },
+  { view: 'assistant', sel: '.content-side',
+    title: 'Tóm tắt quy trình & trạng thái',
+    body: 'Cột phải tóm tắt 8 giai đoạn kèm thời gian tham khảo, giải thích ba trạng thái "Áp dụng / Chưa xác định / Không áp dụng" theo quy tắc hiển thị của hệ thống.' },
+  { view: 'chat', nav: 'ai-assistant', sel: '.chat-composer',
+    title: 'Trợ lý AI — chat trực tiếp',
+    body: 'Hỏi bất cứ điều gì về quy trình, giấy tờ, thời gian... AI trả lời dựa trên dữ liệu thật của dự án. Có thể gõ tự do hoặc chọn nhanh từ các chip gợi ý bên dưới ô nhập.' },
+  { view: 'chat', nav: 'ai-assistant', sel: '.content-side',
+    title: 'Lịch sử & ngữ cảnh hiện tại',
+    body: 'Bên phải liệt kê các đoạn chat cũ, loại dự án đang xét và biểu đồ tỷ lệ trạng thái (áp dụng / chưa xác định / không áp dụng). Nhấn "Đoạn chat mới" phía trên để bắt đầu chủ đề khác; nhấn thùng rác để xóa đoạn chat hiện tại.' },
+  { view: 'survey', sel: '.survey-list',
+    title: 'Khảo sát & Mục tiêu',
+    body: 'Trả lời các câu hỏi điều kiện (vị trí, ngân sách, tiến độ...) để hệ thống chuyển nhiều mục "Chưa xác định" sang "Áp dụng" hoặc "Không áp dụng" chính xác hơn. Xong nhấn "Cập nhật kết quả".' },
 ];
 let tourIdx = -1; // -1 = không chạy tour
 
@@ -2520,17 +2534,22 @@ function tourEnd(done) {
 
 function tourApplyStep() {
   const step = TOUR_STEPS[tourIdx];
-  // Chuyển đúng màn hình để phần tử đích tồn tại
+  // Chuyển đúng màn hình để phần tử đích tồn tại. Field `nav` cho phép tách riêng
+  // tab đang sáng (activeNav) khỏi view thực tế (ví dụ màn chat dùng view='chat' nhưng
+  // tab sáng là 'ai-assistant').
   ui.view = step.view;
-  ui.activeNav = step.view;
+  ui.activeNav = step.nav || step.view;
   ui.soon = null;
   render();
-  requestAnimationFrame(() => {
+  // DOM đã được render() dựng đồng bộ — dùng setTimeout(0) thay vì requestAnimationFrame
+  // để phần tử sẵn sàng cho scrollIntoView/getBoundingClientRect cả khi tab ở chế độ ẩn
+  // (nơi rAF bị trình duyệt treo, ví dụ tab background hoặc môi trường headless/CDP).
+  setTimeout(() => {
     const el = document.querySelector(step.sel);
     if (el) el.scrollIntoView({ block: 'center' });
     tourRenderCard();
     tourPosition();
-  });
+  }, 0);
 }
 
 function tourRenderCard() {
@@ -2619,9 +2638,8 @@ if (!S.isPersistent()) {
 
 render();
 
-// Tự mở hướng dẫn nổi ở lần truy cập đầu tiên (ghi nhớ trong localStorage)
-try {
-  if (!localStorage.getItem(TOUR_KEY)) tourStart();
-} catch (e) { /* bỏ qua */ }
+// Hướng dẫn nổi tự chạy ngay khi vào web — không đợi người dùng nhấn nút
+// "Hướng dẫn từng bước". Muốn chạy lại vẫn dùng được nút đó hoặc tải lại trang.
+tourStart();
 
 })();
