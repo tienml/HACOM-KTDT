@@ -9,6 +9,9 @@ biến môi trường, đặt trên Railway (Variables):
   PORT           - cổng lắng nghe (Railway tự cấp, mặc định 8080).
   GEMINI_API_KEY - khóa lấy miễn phí tại https://aistudio.google.com/apikey
                    (nhiều khóa ngăn bằng dấu phẩy để xoay khi gặp giới hạn 429)
+  GROQ_API_KEY   - (tùy chọn) khóa dự phòng miễn phí tại https://console.groq.com/keys
+  OPENROUTER_API_KEY - (tùy chọn) khóa dự phòng miễn phí tại https://openrouter.ai/settings/keys
+  GROQ_MODEL / OPENROUTER_MODEL - (tùy chọn) ghi đè model mặc định của từng nhà cung cấp
   GEMINI_MODEL   - tùy chọn, mặc định gemini-3.5-flash
 """
 
@@ -33,6 +36,26 @@ DEMO_DIR = os.path.join(BASE_DIR, 'demo')
 GEMINI_API_KEYS = [k.strip() for k in os.environ.get('GEMINI_API_KEY', '').split(',') if k.strip()]
 # Dòng model hiện hành (8/2026): gemini-3.x-flash. Dòng 2.5 cũ có thể bị Google từ chối -> lỗi 404.
 GEMINI_MODEL = os.environ.get('GEMINI_MODEL', 'gemini-3.5-flash')
+
+# Nhà cung cấp dự phòng miễn phí (OpenAI-compatible). Khi Gemini hết hạn mức (429),
+# server tự chuyển sang đây để vẫn trả lời được. Lấy khóa miễn phí tại:
+#   Groq       https://console.groq.com/keys        (nhanh, hạn mức free khá rộng)
+#   OpenRouter https://openrouter.ai/settings/keys  (có các model gắn hậu tố :free)
+# Mỗi biến là một khóa đơn; GROQ_MODEL / OPENROUTER_MODEL tùy chọn ghi đè model mặc định.
+GROQ_API_KEY = os.environ.get('GROQ_API_KEY', '').strip()
+GROQ_MODEL = os.environ.get('GROQ_MODEL', 'llama-3.3-70b-versatile')
+OPENROUTER_API_KEY = os.environ.get('OPENROUTER_API_KEY', '').strip()
+OPENROUTER_MODEL = os.environ.get('OPENROUTER_MODEL', 'meta-llama/llama-3.3-70b-instruct:free')
+
+
+def _fallback_providers():
+    # Danh sách nhà cung cấp dự phòng đã cấu hình khóa, theo thứ tự ưu tiên.
+    out = []
+    if GROQ_API_KEY:
+        out.append(('Groq', 'https://api.groq.com/openai/v1/chat/completions', GROQ_API_KEY, GROQ_MODEL))
+    if OPENROUTER_API_KEY:
+        out.append(('OpenRouter', 'https://openrouter.ai/api/v1/chat/completions', OPENROUTER_API_KEY, OPENROUTER_MODEL))
+    return out
 
 SYSTEM_PROMPT = (
     'Bạn là trợ lý AI của Hacom AI Invest, am hiểu quy trình đầu tư dự án tại Việt Nam. '
@@ -121,7 +144,7 @@ class Handler(SimpleHTTPRequestHandler):
         except Exception:
             self._json(400, {'error': 'bad-request'})
             return
-        if not GEMINI_API_KEYS:
+        if not (GEMINI_API_KEYS or _fallback_providers()):
             self._json(503, {'error': 'missing-key'})
             return
         if path == '/api/ask':
@@ -143,63 +166,129 @@ class Handler(SimpleHTTPRequestHandler):
         is_stream = (path == '/api/chat')
         url = f'https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}'
         url += ':streamGenerateContent?alt=sse' if is_stream else ':generateContent'
-        resp, err = self._call_gemini(url, payload)
-        if err is not None:
-            code, raw = err
+
+        # Chuỗi thử: Gemini (1 lượt) -> nhà cung cấp dự phòng miễn phí; nếu vẫn 429 thì
+        # chờ ~20s cho hạn mức phút hồi rồi thử lại một lần nữa. text != None nghĩa là
+        # đã có đáp án từ nhà cung cấp dự phòng (không stream), resp != None là luồng Gemini.
+        resp, err, text = None, None, None
+        if GEMINI_API_KEYS:
+            resp, err = self._call_gemini(url, payload)
+        if resp is None:
+            text, fb = self._call_fallback(system, user_text)
+            if text is not None:
+                err = None
+            elif err is None:
+                err = fb
+        if resp is None and text is None and err and err[0] == 429:
+            time.sleep(20)
+            resp, err2 = self._call_gemini(url, payload)
+            if resp is None:
+                text, fb = self._call_fallback(system, user_text)
+                if text is not None:
+                    err2 = None
+            if resp is None and text is None:
+                err = err2 or err
+        if resp is None and text is None:
+            code, raw = err if err else (502, 'no provider available')
             if code == 'exc':
-                sys.stderr.write(f'[gemini] lỗi: {raw}\n')
+                sys.stderr.write(f'[llm] lỗi: {raw}\n')
                 self._json(502, {'error': 'upstream', 'detail': raw})
             else:
-                sys.stderr.write(f'[gemini] HTTP {code}: {raw}\n')
+                sys.stderr.write(f'[llm] HTTP {code}: {raw}\n')
                 detail = self._short_reason(raw) or f'HTTP {code}'
                 self._json(429 if code == 429 else 502, {'error': 'upstream', 'detail': detail})
             return
         if is_stream:
-            # Streaming SSE — trả từng dòng ngay khi Google gửi đến để giảm cảm giác chậm.
             self.send_response(200)
             self.send_header('Content-Type', 'text/event-stream; charset=utf-8')
             self.send_header('Cache-Control', 'no-cache')
             self.end_headers()
             try:
-                with resp:
-                    for line in resp:
-                        if line[:5] == b'data:':
-                            # Gemini gửi dạng "data: {...}\r\n"; chuẩn hóa về \n cho trình duyệt.
-                            stripped = line.rstrip(b'\r\n') + b'\n'
-                            self.wfile.write(stripped)
-                            self.wfile.flush()
+                if resp is not None:
+                    # Streaming SSE — trả từng dòng ngay khi Google gửi đến để giảm cảm giác chậm.
+                    with resp:
+                        for line in resp:
+                            if line[:5] == b'data:':
+                                # Gemini gửi dạng "data: {...}\r\n"; chuẩn hóa về \n cho trình duyệt.
+                                stripped = line.rstrip(b'\r\n') + b'\n'
+                                self.wfile.write(stripped)
+                                self.wfile.flush()
+                else:
+                    # Nhà cung cấp dự phòng trả nguyên văn: gói thành một chunk theo đúng định dạng
+                    # Gemini mà frontend đang parse (candidates[0].content.parts[0].text).
+                    chunk = {'candidates': [{'content': {'parts': [{'text': text}]}}]}
+                    self.wfile.write(b'data: ' + json.dumps(chunk, ensure_ascii=False).encode('utf-8') + b'\n\n')
+                    self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):
                 pass
             return
-        with resp:
-            data = json.loads(resp.read().decode('utf-8'))
-        text = data['candidates'][0]['content']['parts'][0]['text']
+        if text is None:
+            with resp:
+                data = json.loads(resp.read().decode('utf-8'))
+            text = data['candidates'][0]['content']['parts'][0]['text']
         self._json(200, {'answer': text})
 
     def _call_gemini(self, url, payload):
-        # Gọi Gemini; khi gặp 429 (gói miễn phí giới hạn lượt gọi) thì xoay sang
-        # key kế tiếp; hết lượt key thì chờ ~20s cho hạn mức theo phút hồi rồi thử lại.
+        # Gọi Gemini một lượt qua các key; gặp 429 thì xoay sang key kế tiếp.
         # Trả về (resp, None) khi thành công, hoặc (None, (mã_lỗi, raw)) khi thất bại.
         last = None
-        for round_idx in range(2):
-            for key in GEMINI_API_KEYS:
-                req = Request(
-                    url,
-                    data=payload,
-                    method='POST',
-                    headers={'Content-Type': 'application/json', 'x-goog-api-key': key},
-                )
-                try:
-                    return urlopen(req, timeout=60), None
-                except HTTPError as e:
-                    raw = e.read().decode('utf-8', 'replace')[:400]
-                    if e.code != 429:
-                        return None, (e.code, raw)
-                    last = (429, raw)
-                except Exception as e:
-                    return None, ('exc', str(e)[:160])
-            if round_idx == 0:
-                time.sleep(20)
+        for key in GEMINI_API_KEYS:
+            req = Request(
+                url,
+                data=payload,
+                method='POST',
+                headers={'Content-Type': 'application/json', 'x-goog-api-key': key},
+            )
+            try:
+                return urlopen(req, timeout=60), None
+            except HTTPError as e:
+                raw = e.read().decode('utf-8', 'replace')[:400]
+                if e.code != 429:
+                    return None, (e.code, raw)
+                last = (429, raw)
+            except Exception as e:
+                return None, ('exc', str(e)[:160])
+        return None, last
+
+    def _call_fallback(self, system, user_text):
+        # Gọi lần lượt các nhà cung cấp dự phòng (OpenAI-compatible) không stream.
+        # Trả về (text, None) khi thành công, hoặc (None, (mã_lỗi, raw)) khi tất cả đều lỗi.
+        providers = _fallback_providers()
+        if not providers:
+            return None, None
+        body = json.dumps({
+            'model': '__MODEL__',
+            'messages': [
+                {'role': 'system', 'content': system},
+                {'role': 'user', 'content': user_text},
+            ],
+            'stream': False,
+        }).encode('utf-8')
+        last = None
+        for name, endpoint, key, model in providers:
+            payload = body.replace(b'"__MODEL__"', json.dumps(model).encode('utf-8'))
+            headers = {
+                'Content-Type': 'application/json',
+                'Authorization': f'Bearer {key}',
+                'HTTP-Referer': 'https://hacom-invest.up.railway.app/',
+                'X-Title': 'Hacom AI Invest',
+            }
+            req = Request(endpoint, data=payload, method='POST', headers=headers)
+            try:
+                with urlopen(req, timeout=60) as r:
+                    data = json.loads(r.read().decode('utf-8'))
+                msg = data['choices'][0]['message']['content']
+                sys.stderr.write(f'[llm] dùng nhà cung cấp dự phòng: {name}\n')
+                return msg, None
+            except HTTPError as e:
+                raw = e.read().decode('utf-8', 'replace')[:400]
+                sys.stderr.write(f'[{name}] HTTP {e.code}: {raw}\n')
+                last = (e.code, raw)
+                continue  # thử nhà cung cấp kế tiếp
+            except Exception as e:
+                sys.stderr.write(f'[{name}] lỗi: {e}\n')
+                last = ('exc', str(e)[:160])
+                continue
         return None, last
 
     @staticmethod
@@ -228,8 +317,8 @@ def main():
     port = int(os.environ.get('PORT', '8080'))
     server = HTTPServer(('0.0.0.0', port), Handler)
     print(f'Hacom AI Invest demo đang chạy tại http://127.0.0.1:{port}/')
-    if not GEMINI_API_KEYS:
-        print('Lưu ý: thiếu GEMINI_API_KEY — /api/ask sẽ trả 503, UI dùng kết quả quy tắc.')
+    if not (GEMINI_API_KEYS or _fallback_providers()):
+        print('Lưu ý: chưa cấu hình khóa LLM nào (GEMINI/GROQ/OPENROUTER) — /api sẽ trả 503, UI dùng kết quả quy tắc.')
     try:
         server.serve_forever()
     except KeyboardInterrupt:
