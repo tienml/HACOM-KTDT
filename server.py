@@ -8,6 +8,7 @@ biến môi trường, đặt trên Railway (Variables):
 
   PORT           - cổng lắng nghe (Railway tự cấp, mặc định 8080).
   GEMINI_API_KEY - khóa lấy miễn phí tại https://aistudio.google.com/apikey
+                   (nhiều khóa ngăn bằng dấu phẩy để xoay khi gặp giới hạn 429)
   GEMINI_MODEL   - tùy chọn, mặc định gemini-3.5-flash
 """
 
@@ -15,6 +16,7 @@ import json
 import mimetypes
 import os
 import sys
+import time
 from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
@@ -27,7 +29,8 @@ if hasattr(sys.stdout, 'reconfigure'):
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DEMO_DIR = os.path.join(BASE_DIR, 'demo')
 
-GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
+# Chấp nhận nhiều khóa ngăn bằng dấu phẩy: khi một key chạm giới hạn 429 sẽ xoay sang key khác.
+GEMINI_API_KEYS = [k.strip() for k in os.environ.get('GEMINI_API_KEY', '').split(',') if k.strip()]
 # Dòng model hiện hành (8/2026): gemini-3.x-flash. Dòng 2.5 cũ có thể bị Google từ chối -> lỗi 404.
 GEMINI_MODEL = os.environ.get('GEMINI_MODEL', 'gemini-3.5-flash')
 
@@ -118,7 +121,7 @@ class Handler(SimpleHTTPRequestHandler):
         except Exception:
             self._json(400, {'error': 'bad-request'})
             return
-        if not GEMINI_API_KEY:
+        if not GEMINI_API_KEYS:
             self._json(503, {'error': 'missing-key'})
             return
         if path == '/api/ask':
@@ -140,23 +143,16 @@ class Handler(SimpleHTTPRequestHandler):
         is_stream = (path == '/api/chat')
         url = f'https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}'
         url += ':streamGenerateContent?alt=sse' if is_stream else ':generateContent'
-        req = Request(
-            url,
-            data=payload,
-            method='POST',
-            headers={'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_API_KEY},
-        )
-        try:
-            resp = urlopen(req, timeout=60)
-        except HTTPError as e:
-            raw = e.read().decode('utf-8', 'replace')[:400]
-            sys.stderr.write(f'[gemini] HTTP {e.code}: {raw}\n')
-            detail = self._short_reason(raw) or f'HTTP {e.code}'
-            self._json(e.code if e.code == 429 else 502, {'error': 'upstream', 'detail': detail})
-            return
-        except Exception as e:
-            sys.stderr.write(f'[gemini] lỗi: {e}\n')
-            self._json(502, {'error': 'upstream', 'detail': str(e)[:160]})
+        resp, err = self._call_gemini(url, payload)
+        if err is not None:
+            code, raw = err
+            if code == 'exc':
+                sys.stderr.write(f'[gemini] lỗi: {raw}\n')
+                self._json(502, {'error': 'upstream', 'detail': raw})
+            else:
+                sys.stderr.write(f'[gemini] HTTP {code}: {raw}\n')
+                detail = self._short_reason(raw) or f'HTTP {code}'
+                self._json(429 if code == 429 else 502, {'error': 'upstream', 'detail': detail})
             return
         if is_stream:
             # Streaming SSE — trả từng dòng ngay khi Google gửi đến để giảm cảm giác chậm.
@@ -179,6 +175,32 @@ class Handler(SimpleHTTPRequestHandler):
             data = json.loads(resp.read().decode('utf-8'))
         text = data['candidates'][0]['content']['parts'][0]['text']
         self._json(200, {'answer': text})
+
+    def _call_gemini(self, url, payload):
+        # Gọi Gemini; khi gặp 429 (gói miễn phí giới hạn lượt gọi) thì xoay sang
+        # key kế tiếp; hết lượt key thì chờ ~20s cho hạn mức theo phút hồi rồi thử lại.
+        # Trả về (resp, None) khi thành công, hoặc (None, (mã_lỗi, raw)) khi thất bại.
+        last = None
+        for round_idx in range(2):
+            for key in GEMINI_API_KEYS:
+                req = Request(
+                    url,
+                    data=payload,
+                    method='POST',
+                    headers={'Content-Type': 'application/json', 'x-goog-api-key': key},
+                )
+                try:
+                    return urlopen(req, timeout=60), None
+                except HTTPError as e:
+                    raw = e.read().decode('utf-8', 'replace')[:400]
+                    if e.code != 429:
+                        return None, (e.code, raw)
+                    last = (429, raw)
+                except Exception as e:
+                    return None, ('exc', str(e)[:160])
+            if round_idx == 0:
+                time.sleep(20)
+        return None, last
 
     @staticmethod
     def _short_reason(raw):
@@ -206,7 +228,7 @@ def main():
     port = int(os.environ.get('PORT', '8080'))
     server = HTTPServer(('0.0.0.0', port), Handler)
     print(f'Hacom AI Invest demo đang chạy tại http://127.0.0.1:{port}/')
-    if not GEMINI_API_KEY:
+    if not GEMINI_API_KEYS:
         print('Lưu ý: thiếu GEMINI_API_KEY — /api/ask sẽ trả 503, UI dùng kết quả quy tắc.')
     try:
         server.serve_forever()
