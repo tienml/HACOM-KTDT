@@ -1114,11 +1114,12 @@ function chatBubbleHTML(msg) {
       </div>`;
   }
   if (msg.status === 'rate') {
+    const detail = msg.detail ? ` — chi tiết: ${esc(msg.detail)}` : '';
     return `
       <div class="chat-msg ai">
         ${avatar}
         <div class="chat-col">
-          <div class="chat-bubble chat-bubble-ai ai-note">Trợ lý AI đang quá tải (gói miễn phí giới hạn lượt gọi). Thử lại sau ít phút.</div>
+          <div class="chat-bubble chat-bubble-ai ai-note">Trợ lý AI đang quá tải (gói miễn phí giới hạn lượt gọi). Thử lại sau ít phút${detail}</div>
           ${foot}
         </div>
       </div>`;
@@ -1438,7 +1439,12 @@ async function sendChat(text) {
     });
     if (seq !== chatSeq) return;
     if (res.status === 503) next = { role: 'ai', status: 'nokey', text: '' };
-    else if (res.status === 429) next = { role: 'ai', status: 'rate', text: '' };
+    else if (res.status === 429) {
+      let detail = '';
+      try { const d = await res.json(); detail = d && d.detail ? String(d.detail) : ''; } catch (e) {}
+      if (seq !== chatSeq) return;
+      next = { role: 'ai', status: 'rate', text: '', detail };
+    }
     else if (!res.ok) {
       let detail = '';
       try { const d = await res.json(); detail = d && d.detail ? String(d.detail) : ''; } catch (e) {}

@@ -19,7 +19,6 @@ import json
 import mimetypes
 import os
 import sys
-import time
 from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
@@ -43,7 +42,9 @@ GEMINI_MODEL = os.environ.get('GEMINI_MODEL', 'gemini-3.5-flash')
 #   OpenRouter https://openrouter.ai/settings/keys  (có các model gắn hậu tố :free)
 # Mỗi biến là một khóa đơn; GROQ_MODEL / OPENROUTER_MODEL tùy chọn ghi đè model mặc định.
 GROQ_API_KEY = os.environ.get('GROQ_API_KEY', '').strip()
+# Model mặc định + danh sách dự phòng: nếu model đầu bị từ chối (hết hỗ trợ/404) sẽ tự thử các model sau.
 GROQ_MODEL = os.environ.get('GROQ_MODEL', 'llama-3.3-70b-versatile')
+GROQ_MODELS_FALLBACK = ['llama-3.1-8b-instant', 'openai/gpt-oss-20b']
 OPENROUTER_API_KEY = os.environ.get('OPENROUTER_API_KEY', '').strip()
 OPENROUTER_MODEL = os.environ.get('OPENROUTER_MODEL', 'meta-llama/llama-3.3-70b-instruct:free')
 
@@ -52,9 +53,10 @@ def _fallback_providers():
     # Danh sách nhà cung cấp dự phòng đã cấu hình khóa, theo thứ tự ưu tiên.
     out = []
     if GROQ_API_KEY:
-        out.append(('Groq', 'https://api.groq.com/openai/v1/chat/completions', GROQ_API_KEY, GROQ_MODEL))
+        models = [GROQ_MODEL] + [m for m in GROQ_MODELS_FALLBACK if m != GROQ_MODEL]
+        out.append(('Groq', 'https://api.groq.com/openai/v1/chat/completions', GROQ_API_KEY, models))
     if OPENROUTER_API_KEY:
-        out.append(('OpenRouter', 'https://openrouter.ai/api/v1/chat/completions', OPENROUTER_API_KEY, OPENROUTER_MODEL))
+        out.append(('OpenRouter', 'https://openrouter.ai/api/v1/chat/completions', OPENROUTER_API_KEY, [OPENROUTER_MODEL]))
     return out
 
 SYSTEM_PROMPT = (
@@ -167,9 +169,10 @@ class Handler(SimpleHTTPRequestHandler):
         url = f'https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}'
         url += ':streamGenerateContent?alt=sse' if is_stream else ':generateContent'
 
-        # Chuỗi thử: Gemini (1 lượt) -> nhà cung cấp dự phòng miễn phí; nếu vẫn 429 thì
-        # chờ ~20s cho hạn mức phút hồi rồi thử lại một lần nữa. text != None nghĩa là
-        # đã có đáp án từ nhà cung cấp dự phòng (không stream), resp != None là luồng Gemini.
+        # Chuỗi thử: Gemini (1 lượt qua các key) rồi đến nhà cung cấp dự phòng miễn phí.
+        # Không chờ đợi giữa các lượt để trả lời nhanh nhất có thể.
+        # text != None nghĩa là đã có đáp án từ nhà cung cấp dự phòng (không stream),
+        # resp != None là luồng Gemini.
         resp, err, text = None, None, None
         if GEMINI_API_KEYS:
             resp, err = self._call_gemini(url, payload)
@@ -179,15 +182,6 @@ class Handler(SimpleHTTPRequestHandler):
                 err = None
             elif err is None:
                 err = fb
-        if resp is None and text is None and err and err[0] == 429:
-            time.sleep(20)
-            resp, err2 = self._call_gemini(url, payload)
-            if resp is None:
-                text, fb = self._call_fallback(system, user_text)
-                if text is not None:
-                    err2 = None
-            if resp is None and text is None:
-                err = err2 or err
         if resp is None and text is None:
             code, raw = err if err else (502, 'no provider available')
             if code == 'exc':
@@ -252,43 +246,47 @@ class Handler(SimpleHTTPRequestHandler):
 
     def _call_fallback(self, system, user_text):
         # Gọi lần lượt các nhà cung cấp dự phòng (OpenAI-compatible) không stream.
-        # Trả về (text, None) khi thành công, hoặc (None, (mã_lỗi, raw)) khi tất cả đều lỗi.
+        # Mỗi nhà cung cấp có danh sách model: nếu model bị từ chối (400/404, thường do hết hỗ trợ)
+        # thì tự thử model kế tiếp. Trả về (text, None) khi thành công, hoặc (None, (mã, raw)) khi tất cả lỗi.
         providers = _fallback_providers()
         if not providers:
             return None, None
-        body = json.dumps({
-            'model': '__MODEL__',
-            'messages': [
-                {'role': 'system', 'content': system},
-                {'role': 'user', 'content': user_text},
-            ],
-            'stream': False,
-        }).encode('utf-8')
         last = None
-        for name, endpoint, key, model in providers:
-            payload = body.replace(b'"__MODEL__"', json.dumps(model).encode('utf-8'))
+        for name, endpoint, key, models in providers:
             headers = {
                 'Content-Type': 'application/json',
                 'Authorization': f'Bearer {key}',
                 'HTTP-Referer': 'https://hacom-invest.up.railway.app/',
                 'X-Title': 'Hacom AI Invest',
             }
-            req = Request(endpoint, data=payload, method='POST', headers=headers)
-            try:
-                with urlopen(req, timeout=60) as r:
-                    data = json.loads(r.read().decode('utf-8'))
-                msg = data['choices'][0]['message']['content']
-                sys.stderr.write(f'[llm] dùng nhà cung cấp dự phòng: {name}\n')
-                return msg, None
-            except HTTPError as e:
-                raw = e.read().decode('utf-8', 'replace')[:400]
-                sys.stderr.write(f'[{name}] HTTP {e.code}: {raw}\n')
-                last = (e.code, raw)
-                continue  # thử nhà cung cấp kế tiếp
-            except Exception as e:
-                sys.stderr.write(f'[{name}] lỗi: {e}\n')
-                last = ('exc', str(e)[:160])
-                continue
+            for model in models:
+                payload = json.dumps({
+                    'model': model,
+                    'messages': [
+                        {'role': 'system', 'content': system},
+                        {'role': 'user', 'content': user_text},
+                    ],
+                    'stream': False,
+                }).encode('utf-8')
+                req = Request(endpoint, data=payload, method='POST', headers=headers)
+                try:
+                    with urlopen(req, timeout=60) as r:
+                        data = json.loads(r.read().decode('utf-8'))
+                    msg = data['choices'][0]['message']['content']
+                    sys.stderr.write(f'[llm] dùng nhà cung cấp dự phòng: {name} (model {model})\n')
+                    return msg, None
+                except HTTPError as e:
+                    raw = e.read().decode('utf-8', 'replace')[:400]
+                    sys.stderr.write(f'[{name}/{model}] HTTP {e.code}: {raw}\n')
+                    last = (e.code, raw)
+                    # 400/404 thường là model không còn hỗ trợ -> thử model khác của cùng nhà cung cấp.
+                    if e.code in (400, 404):
+                        continue
+                    break  # lỗi khác (401/429...) -> bỏ qua nhà cung cấp này, thử nhà cung cấp kế
+                except Exception as e:
+                    sys.stderr.write(f'[{name}/{model}] lỗi: {e}\n')
+                    last = ('exc', str(e)[:160])
+                    break
         return None, last
 
     @staticmethod
