@@ -135,6 +135,40 @@ class Handler(SimpleHTTPRequestHandler):
             return os.path.join(DEMO_DIR, 'index.html')
         return result
 
+    def do_GET(self):
+        if self.path.split('?')[0] == '/api/health':
+            self._health()
+            return
+        super().do_GET()
+
+    def _health(self):
+        # Chẩn đoán nhanh cấu hình LLM: mỗi nhà cung cấp được "ping" một yêu cầu
+        # cực nhỏ để báo trạng thái thật (ok / mã lỗi / chi tiết) mà không tốn quota đáng kể.
+        out = {'gemini_keys': len(GEMINI_API_KEYS), 'providers': []}
+        for name, endpoint, key, models in _fallback_providers():
+            entry = {'name': name, 'model': models[0], 'status': 'ok'}
+            req = Request(
+                endpoint,
+                data=json.dumps({
+                    'model': models[0],
+                    'messages': [{'role': 'user', 'content': 'ping'}],
+                    'max_tokens': 1,
+                }).encode('utf-8'),
+                method='POST',
+                headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {key}'},
+            )
+            try:
+                with urlopen(req, timeout=15) as r:
+                    r.read()
+            except HTTPError as e:
+                entry['status'] = f'HTTP {e.code}'
+                entry['detail'] = e.read().decode('utf-8', 'replace')[:200]
+            except Exception as e:
+                entry['status'] = 'error'
+                entry['detail'] = str(e)[:160]
+            out['providers'].append(entry)
+        self._json(200, out)
+
     def do_POST(self):
         path = self.path.split('?')[0]
         if path not in ('/api/ask', '/api/propose', '/api/portfolio', '/api/chat'):
@@ -180,7 +214,9 @@ class Handler(SimpleHTTPRequestHandler):
             text, fb = self._call_fallback(system, user_text)
             if text is not None:
                 err = None
-            elif err is None:
+            elif fb is not None:
+                # Ưu tiên lỗi của nhà cung cấp dự phòng: đó mới là thông tin cần xử lý
+                # (lỗi quota của Gemini thường chỉ tự hết sau một ngày).
                 err = fb
         if resp is None and text is None:
             code, raw = err if err else (502, 'no provider available')
