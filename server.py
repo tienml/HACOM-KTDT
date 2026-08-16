@@ -48,6 +48,10 @@ GROQ_MODELS_FALLBACK = ['llama-3.1-8b-instant', 'openai/gpt-oss-20b']
 OPENROUTER_API_KEY = os.environ.get('OPENROUTER_API_KEY', '').strip()
 OPENROUTER_MODEL = os.environ.get('OPENROUTER_MODEL', 'meta-llama/llama-3.3-70b-instruct:free')
 
+# Groq đứng sau Cloudflare, nơi chặn User-Agent mặc định "Python-urllib/..." của
+# Python (trả error code 1010). Gửi UA giống trình duyệt để không bị chặn.
+BROWSER_UA = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'}
+
 
 def _fallback_providers():
     # Danh sách nhà cung cấp dự phòng đã cấu hình khóa, theo thứ tự ưu tiên.
@@ -155,7 +159,7 @@ class Handler(SimpleHTTPRequestHandler):
                     'max_tokens': 1,
                 }).encode('utf-8'),
                 method='POST',
-                headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {key}'},
+                headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {key}', **BROWSER_UA},
             )
             try:
                 with urlopen(req, timeout=15) as r:
@@ -267,7 +271,7 @@ class Handler(SimpleHTTPRequestHandler):
                 url,
                 data=payload,
                 method='POST',
-                headers={'Content-Type': 'application/json', 'x-goog-api-key': key},
+                headers={'Content-Type': 'application/json', 'x-goog-api-key': key, **BROWSER_UA},
             )
             try:
                 return urlopen(req, timeout=60), None
@@ -294,6 +298,7 @@ class Handler(SimpleHTTPRequestHandler):
                 'Authorization': f'Bearer {key}',
                 'HTTP-Referer': 'https://hacom-invest.up.railway.app/',
                 'X-Title': 'Hacom AI Invest',
+                **BROWSER_UA,
             }
             for model in models:
                 payload = json.dumps({
