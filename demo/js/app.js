@@ -1152,7 +1152,7 @@ function chatBubbleHTML(msg) {
       ${avatar}
       <div class="chat-col">
         <div class="chat-bubble chat-bubble-ai">
-          <div class="ai-text">${formatAIText(msg.text)}</div>
+          <div class="ai-text">${formatAIText(parseTomtat(msg.text).text)}</div>
           ${resultCard}
         </div>
         ${foot}
@@ -1381,31 +1381,41 @@ async function streamChatText(res, loadingBubble) {
 }
 
 /** Gemini đính kèm đúng một dòng máy đọc ở cuối mỗi câu trả lời: [TOMTAT]{json}[/TOMTAT].
-    Hàm này tách dòng đó ra khỏi văn bản hiển thị và trả về summary (hoặc null nếu không có/không hợp lệ). */
+    Hàm này tách dòng đó ra khỏi văn bản hiển thị và trả về summary (hoặc null nếu không có/không hợp lệ).
+    Chấp nhận cả trường hợp model quên thẻ đóng [/TOMTAT] (một số nhà cung cấp dự phòng hay cắt cụt):
+    khi gặp [TOMTAT] thì luôn xóa từ đó đến hết chuỗi cho phần hiển thị, đồng thời cố gắng parse JSON. */
 function parseTomtat(full) {
   const raw = String(full || '');
-  const m = raw.match(/\[TOMTAT\]\s*(\{[\s\S]*?\})\s*\[\/TOMTAT\]/);
-  if (!m) return { text: raw, summary: null };
+  const idx = raw.indexOf('[TOMTAT]');
+  if (idx < 0) return { text: raw, summary: null };
+  const tail = raw.slice(idx + 8);
   let summary = null;
-  try {
-    const o = JSON.parse(m[1]);
-    // Chỉ chấp nhận type id hợp lệ theo D.typeById; ngoài ra coi là "chung"
-    const guessed = D.typeById(o && o.type);
-    const typeId = (guessed && guessed.id === o.type) ? o.type : 'chung';
-    const num = (v) => (typeof v === 'number' && isFinite(v) && v >= 0) ? Math.round(v) : 0;
-    const stageRaw = typeof o.stage === 'string' ? o.stage.trim() : '';
-    const stageValid = D.STAGES.some((s) => s.id === stageRaw);
-    summary = {
-      typeId,
-      apply: num(o.apply),
-      unknown: num(o.unknown),
-      na: num(o.na),
-      total: num(o.total),
-      stage: stageValid ? stageRaw : '',
-      at: new Date().toISOString(),
-    };
-  } catch (e) { summary = null; }
-  const text = raw.replace(m[0], '').replace(/\s+$/, '');
+  // Ưu tiên dạng đầy đủ có thẻ đóng; fallback sang dạng thiếu thẻ đóng (greedy tới } cuối trước tùy chọn [/TOMTAT]).
+  const mFull = tail.match(/^\s*(\{[\s\S]*?\})\s*\[\/TOMTAT\]/);
+  const mLoose = !mFull ? tail.match(/^\s*(\{[\s\S]*\})(?:\s*\[\/TOMTAT\])?\s*$/) : null;
+  const m = mFull || mLoose;
+  if (m) {
+    try {
+      const o = JSON.parse(m[1]);
+      // Chỉ chấp nhận type id hợp lệ theo D.typeById; ngoài ra coi là "chung"
+      const guessed = D.typeById(o && o.type);
+      const typeId = (guessed && guessed.id === o.type) ? o.type : 'chung';
+      const num = (v) => (typeof v === 'number' && isFinite(v) && v >= 0) ? Math.round(v) : 0;
+      const stageRaw = typeof o.stage === 'string' ? o.stage.trim() : '';
+      const stageValid = D.STAGES.some((s) => s.id === stageRaw);
+      summary = {
+        typeId,
+        apply: num(o.apply),
+        unknown: num(o.unknown),
+        na: num(o.na),
+        total: num(o.total),
+        stage: stageValid ? stageRaw : '',
+        at: new Date().toISOString(),
+      };
+    } catch (e) { summary = null; }
+  }
+  // Luôn bỏ toàn bộ phần từ [TOMTAT] trở đi cho bản hiển thị, kể cả khi JSON không parse được.
+  const text = raw.slice(0, idx).replace(/\s+$/, '');
   return { text, summary };
 }
 
